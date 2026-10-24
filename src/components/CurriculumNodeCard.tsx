@@ -169,15 +169,13 @@ export function CurriculumNodeCard({ data }: NodeProps) {
         />
       )}
 
-      {/* Right Handle for spawning remediation branches horizontally */}
-      {!isBranch && (
-        <Handle
-          type="source"
-          position={Position.Right}
-          id="right"
-          className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-slate-950"
-        />
-      )}
+      {/* Right Handle for spawning remediation branches horizontally (on both root and branch nodes) */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="right"
+        className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-slate-950"
+      />
     </div>
   );
 }
