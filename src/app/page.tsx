@@ -1196,10 +1196,20 @@ topic: "${appState.topic_title || "Learning Path"}"
 
           <button
             onClick={() => setIsSecurityModalOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 hover:border-rose-500/50 hover:text-rose-300 transition-colors"
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
+              isSecurityRefusal
+                ? "border-rose-500/70 bg-rose-950/60 text-rose-200 animate-pulse"
+                : "border-rose-500/40 bg-rose-950/25 text-rose-200 hover:bg-rose-950/50"
+            }`}
+            title="Inspect BYOK session isolation, XML sandbox guardrails, and live misuse test payloads"
           >
             <ShieldAlert className="h-3.5 w-3.5 text-rose-400" />
-            Safety Info
+            <span>Security &amp; Guardrails</span>
+            {isSecurityRefusal && (
+              <span className="rounded bg-rose-500/30 px-1.5 py-0.2 text-[10px] font-bold text-rose-100">
+                Blocked
+              </span>
+            )}
           </button>
 
           <button
@@ -1892,6 +1902,7 @@ topic: "${appState.topic_title || "Learning Path"}"
         sessionId={sessionId}
         isBlankSlateVerified={isBlankSlateVerified}
         onResetToBlankSlate={handleResetCurriculum}
+        onOpenSecurityModal={() => setIsSecurityModalOpen(true)}
       />
 
       {/* End-of-Path Learning Check & Reflection Survey */}
@@ -1916,6 +1927,11 @@ topic: "${appState.topic_title || "Learning Path"}"
       <SecurityModal
         isOpen={isSecurityModalOpen}
         onClose={() => setIsSecurityModalOpen(false)}
+        sessionId={sessionId}
+        hasApiKey={Boolean(userApiKey.trim())}
+        keptFilesCount={keptFiles.length}
+        isBlankSlateVerified={isBlankSlateVerified}
+        isSecurityRefusalActive={isSecurityRefusal}
       />
     </div>
   );

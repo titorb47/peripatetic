@@ -43,6 +43,7 @@ interface SessionOnboardingModalProps {
   sessionId: string;
   isBlankSlateVerified: boolean;
   onResetToBlankSlate: () => void;
+  onOpenSecurityModal?: () => void;
 }
 
 export function SessionOnboardingModal({
@@ -58,6 +59,7 @@ export function SessionOnboardingModal({
   sessionId,
   isBlankSlateVerified,
   onResetToBlankSlate,
+  onOpenSecurityModal,
 }: SessionOnboardingModalProps) {
   // Step 1: "key" -> Step 2: "memory" -> Step 3: "topic" -> Step 4: "survey"
   const [currentStep, setCurrentStep] = useState<
@@ -380,6 +382,18 @@ export function SessionOnboardingModal({
           </div>
 
           <div className="flex items-center gap-2">
+            {onOpenSecurityModal && (
+              <button
+                type="button"
+                onClick={onOpenSecurityModal}
+                className="inline-flex items-center gap-1 rounded-xl border border-rose-500/40 bg-rose-950/30 px-2.5 py-1.5 text-[11px] font-medium text-rose-200 hover:bg-rose-950/60 hover:text-white transition-colors"
+                title="View BYOK API key privacy, XML sandbox guardrails, and live misuse tests"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-rose-400" />
+                <span>Security &amp; Guardrails</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {
