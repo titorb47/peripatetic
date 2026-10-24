@@ -81,6 +81,7 @@ export function SessionOnboardingModal({
 
   // Step 3: Topic Prompting State
   const [customTopic, setCustomTopic] = useState("");
+  const [securityRefusalError, setSecurityRefusalError] = useState<string | null>(null);
 
   // Step 4: Project Picker & Dynamic Pre-Survey
   const [suggestedProjects, setSuggestedProjects] = useState<SuggestedProject[]>([]);
@@ -209,13 +210,13 @@ export function SessionOnboardingModal({
     const clean = topicToLearn.trim();
     if (!clean) return;
 
+    setSecurityRefusalError(null);
     setCustomTopic(clean);
     setSelectedFile(fileItem);
     setKnownPrerequisites([...masteredNodeTitles]);
     setSuggestedProjects([]);
     setSelectedProject(null);
     setAiPlanNote(null);
-    setCurrentStep("survey");
     setIsLoadingPrereqs(true);
 
     try {
@@ -230,6 +231,15 @@ export function SessionOnboardingModal({
         }),
       });
       const data = await res.json();
+      if (!res.ok || data.blocked) {
+        setSecurityRefusalError(
+          data.error ||
+            "🛡️ SECURITY GUARDRAIL TRIGGERED: Gemini refused this malicious or unsafe topic."
+        );
+        setCurrentStep("topic");
+        return;
+      }
+      setCurrentStep("survey");
       if (
         Array.isArray(data.suggestedProjects) &&
         data.suggestedProjects.length > 0
@@ -250,6 +260,7 @@ export function SessionOnboardingModal({
         setAiPlanNote(data.planNote.trim());
       }
     } catch {
+      setCurrentStep("survey");
       setDynamicPrereqs([...masteredNodeTitles]);
     } finally {
       setIsLoadingPrereqs(false);
@@ -277,6 +288,15 @@ export function SessionOnboardingModal({
   const handleAddCustomProject = () => {
     const val = customProjectInput.trim();
     if (!val) return;
+    const maliciousRegex =
+      /ignore (all )?previous instructions|disregard (all )?(prior|previous)|system prompt|api[_\s-]?key|reveal your|you are no longer|bypass.*rules|<\/?untrusted_learner_data>|\b(ransomware|keylogger|phishing|credential stealer|password stealer|botnet|ddos|rootkit|trojan|spyware|malware|wi-?fi deauth|sql injection exploit|xss payload|reverse shell exploit|credit card skimmer|make a bomb|build a weapon|rm\s+-rf|mkfs)\b/i;
+    if (maliciousRegex.test(val)) {
+      setSecurityRefusalError(
+        "🛡️ SECURITY GUARDRAIL TRIGGERED: Refused malicious, harmful, or exploit-oriented custom project."
+      );
+      return;
+    }
+    setSecurityRefusalError(null);
     const customProj: SuggestedProject = {
       title: val,
       deliverable: `Complete and verify your custom project: "${val}"`,
@@ -289,6 +309,7 @@ export function SessionOnboardingModal({
 
   // Final Action: Launch the Generated Curriculum Graph
   const handleFinalStart = async () => {
+    setSecurityRefusalError(null);
     const preSurvey: PreSurveyData = {
       experienceLevel,
       knownPrerequisites,
@@ -296,14 +317,22 @@ export function SessionOnboardingModal({
       confidenceBefore,
       selectedProject: selectedProject ?? undefined,
     };
-    await onSelectCurriculum(
-      "",
-      customTopic,
-      preSurvey,
-      selectedFile?.snippet || "",
-      enteredKey.trim()
-    );
-    onClose();
+    try {
+      await onSelectCurriculum(
+        "",
+        customTopic,
+        preSurvey,
+        selectedFile?.snippet || "",
+        enteredKey.trim()
+      );
+      onClose();
+    } catch (err) {
+      setSecurityRefusalError(
+        err instanceof Error
+          ? err.message
+          : "🛡️ SECURITY GUARDRAIL TRIGGERED: Refused malicious prompt or project."
+      );
+    }
   };
 
   return (
@@ -738,6 +767,13 @@ export function SessionOnboardingModal({
               </div>
             )}
 
+            {securityRefusalError && (
+              <div className="rounded-xl border-2 border-rose-500/80 bg-rose-950/60 p-3.5 text-xs text-rose-100 flex items-start gap-2.5 shadow-lg">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>{securityRefusalError}</div>
+              </div>
+            )}
+
             {/* Topic Input Box */}
             <form
               onSubmit={(e) => {
@@ -827,6 +863,13 @@ export function SessionOnboardingModal({
         {/* ================= STEP 4: PROJECT PICKER & PRE-SURVEY ================= */}
         {currentStep === "survey" && (
           <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+            {securityRefusalError && (
+              <div className="rounded-xl border-2 border-rose-500/80 bg-rose-950/60 p-3.5 text-xs text-rose-100 flex items-start gap-2.5 shadow-lg">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>{securityRefusalError}</div>
+              </div>
+            )}
+
             {/* Patience Banner for Project & Curriculum Generation */}
             <div className="rounded-xl border border-amber-500/40 bg-amber-950/25 px-3.5 py-2.5 text-xs text-amber-200 flex items-start gap-2.5">
               <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
