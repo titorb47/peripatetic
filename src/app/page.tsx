@@ -576,7 +576,16 @@ ${branchSpec.misconception_identified}
         ),
       }));
 
-      // Automatically switch to the "Terminal & Tutor" tab to display the AI diagnosis, branch alerts, and merge editor
+      // Automatically spawn the helper branch node onto the graph when needed (e.g., on "idk" or a prerequisite gap)
+      if (data.spawn_branch?.should_spawn && activeNode.parent === null) {
+        spawnRemediationBranchNode(data.spawn_branch, activeNode.id);
+        setStatusBanner({
+          type: "warning",
+          text: `Branched out helper step "${data.spawn_branch.title}" (${data.spawn_branch.branch_id}) to help build your understanding!`,
+        });
+      }
+
+      // Automatically switch to the "Feedback & Notes" tab to display the AI diagnosis and helper branch
       setActiveTab("tutor");
     } catch (err) {
       setStatusBanner({
@@ -1589,7 +1598,7 @@ topic: "${appState.topic_title || "Learning Path"}"
                         <div className="space-y-1">
                           <div className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-300">
                             <GitBranch className="w-4 h-4" />
-                            Helpful Side-Step Available
+                            Helper Branch Added to Your Map ({tutorResponse.spawn_branch.branch_id})
                           </div>
                           <p className="text-xs text-slate-200">
                             <strong>{tutorResponse.spawn_branch.title}:</strong>{" "}
@@ -1601,23 +1610,13 @@ topic: "${appState.topic_title || "Learning Path"}"
 
                         <button
                           onClick={() => {
-                            if (tutorResponse.spawn_branch) {
-                              spawnRemediationBranchNode(
-                                tutorResponse.spawn_branch,
-                                activeNode.id
-                              );
-                              setTutorResponse(null);
-                              setActiveTab("briefing");
-                              setStatusBanner({
-                                type: "warning",
-                                text: `Added helper step "${tutorResponse.spawn_branch.title}" to the right of ${activeNode.id}!`,
-                              });
-                            }
+                            setTutorResponse(null);
+                            setActiveTab("briefing");
                           }}
                           className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-colors shadow-lg shadow-amber-950/50"
                         >
                           <GitBranch className="w-4 h-4" />
-                          Open Helper Step: {tutorResponse.spawn_branch.title}
+                          View Helper Step Goal &amp; Task: {tutorResponse.spawn_branch.title}
                         </button>
                       </div>
                     )}
