@@ -63,39 +63,6 @@ import { PostSurveyModal } from "@/components/PostSurveyModal";
 const STORAGE_KEY = "shell_from_scratch_feynman_dag_v2";
 const KEPT_FILES_KEY = "shell_from_scratch_kept_files_v1";
 
-const DEFAULT_KEPT_FILES: KeptFileItem[] = [
-  {
-    id: "kept-git",
-    filename: "git-workflow-notes.md",
-    snippet:
-      "Notes on working directory, staging area (.git/index), commits, and resolving branch merges.",
-    suggestedPrompts: [
-      "How do I git commit?",
-      "How Git branches and merges work",
-    ],
-  },
-  {
-    id: "kept-os",
-    filename: "shell-and-processes.md",
-    snippet:
-      "Lecture notes on how a terminal shell reads commands, forks child processes, and connects pipes.",
-    suggestedPrompts: [
-      "How a Command Shell Works",
-      "What are File Descriptors & Pipes?",
-    ],
-  },
-  {
-    id: "kept-ai",
-    filename: "ml-study-guide.md",
-    snippet:
-      "Study guide covering neural networks, gradients, backpropagation, and transformer attention.",
-    suggestedPrompts: [
-      "How Neural Networks Learn",
-      "Transformer Attention in Plain English",
-    ],
-  },
-];
-
 function extractPromptsFromNote(filename: string, content: string): string[] {
   const headings = Array.from(content.matchAll(/^#{1,3}\s+(.+)$/gm))
     .map((m) => m[1].trim())
@@ -319,7 +286,7 @@ export default function FeynmanDagPlatform() {
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
   const [isPostSurveyOpen, setIsPostSurveyOpen] = useState(false);
   const [mergeEditorView, setMergeEditorView] = useState<"split" | "edit" | "preview">("split");
-  const [keptFiles, setKeptFiles] = useState<KeptFileItem[]>(DEFAULT_KEPT_FILES);
+  const [keptFiles, setKeptFiles] = useState<KeptFileItem[]>([]);
 
   // AI Quota & Engine Status Indicator
   const [aiEngineStatus, setAiEngineStatus] = useState<{
@@ -334,7 +301,7 @@ export default function FeynmanDagPlatform() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Hydrate state from localStorage on mount
+  // Hydrate state from localStorage and load real files from kept-notes/ directory on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -350,6 +317,24 @@ export default function FeynmanDagPlatform() {
     } finally {
       setHydrated(true);
     }
+
+    // Fetch real kept files from kept-notes/ directory on disk
+    fetch("/api/curriculum")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data?.kept_files)) {
+          setKeptFiles((prev) => {
+            const existingNames = new Set(prev.map((f) => f.filename));
+            const diskFiles = (data.kept_files as KeptFileItem[]).filter(
+              (f) => !existingNames.has(f.filename)
+            );
+            return [...prev, ...diskFiles];
+          });
+        }
+      })
+      .catch(() => {
+        // Ignore network errors on initial load
+      });
   }, []);
 
   // Sync state to localStorage
@@ -2048,7 +2033,7 @@ topic: "${appState.topic_title || "Learning Path"}"
         </div>
       </div>
 
-      {/* Start Screen: Pre-Check Survey, Kept Files Prompts, and Topic Picker */}
+      {/* Start Screen: 2-Step Topic Picker + Dynamic Pre-Check Survey */}
       <OnboardingModal
         isOpen={isOnboardingOpen}
         onClose={() => setIsOnboardingOpen(false)}
@@ -2059,6 +2044,9 @@ topic: "${appState.topic_title || "Learning Path"}"
         onOpenSecurityModal={() => setIsSecurityModalOpen(true)}
         isGeneratingCurriculum={isGeneratingCurriculum}
         keptFiles={keptFiles}
+        masteredNodeTitles={appState.nodes
+          .filter((n) => n.status === "merged")
+          .map((n) => n.title)}
       />
 
       {/* End-of-Path Learning Check & Reflection Survey */}

@@ -1,11 +1,77 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "fs/promises";
+import path from "path";
 import {
   AppState,
   AppStateSchema,
   CurriculumNode,
+  KeptFileItem,
   PreSurveyData,
 } from "@/types/schema";
 import { INITIAL_APP_STATE } from "@/data/seedNodes";
+
+function extractPromptsFromMarkdownContent(
+  filename: string,
+  content: string
+): string[] {
+  const headings = Array.from(content.matchAll(/^#{2,3}\s+(.+)$/gm))
+    .map((m) => m[1].trim())
+    .filter((h) => h.length > 3 && h.length < 60);
+
+  if (headings.length > 0) {
+    return headings.slice(0, 3);
+  }
+
+  const h1 = content.match(/^#\s+(.+)$/m)?.[1]?.trim();
+  const baseName = filename
+    .replace(/\.(md|txt)$/i, "")
+    .replace(/[-_]/g, " ")
+    .trim();
+  return [h1 || `Learn ${baseName}`];
+}
+
+export async function GET() {
+  try {
+    const dirPath = path.join(process.cwd(), "kept-notes");
+    const entries = await fs.readdir(dirPath).catch(() => [] as string[]);
+    const keptFiles: KeptFileItem[] = [];
+
+    for (const fname of entries) {
+      if (!fname.endsWith(".md") && !fname.endsWith(".txt")) continue;
+      const fullPath = path.join(dirPath, fname);
+      const raw = await fs.readFile(fullPath, "utf8").catch(() => "");
+      if (!raw.trim()) continue;
+
+      const cleanSnippet = raw
+        .replace(/^---[\s\S]*?---/, "")
+        .replace(/^#+.+$/gm, "")
+        .replace(/[*`]/g, "")
+        .trim()
+        .slice(0, 140);
+
+      keptFiles.push({
+        id: `disk-${fname}`,
+        filename: fname,
+        snippet: cleanSnippet || `Notes from ${fname}`,
+        suggestedPrompts: extractPromptsFromMarkdownContent(fname, raw),
+      });
+    }
+
+    return NextResponse.json({ keptFiles });
+  } catch {
+    return NextResponse.json({ keptFiles: [] });
+  }
+}
+
+function buildFallbackPrerequisites(topic: string): string[] {
+  const clean = topic.trim() || "this topic";
+  return [
+    `What "${clean}" is used for`,
+    `Basic terms & vocabulary of ${clean}`,
+    `How a simple example of ${clean} works`,
+    `Common mistakes to avoid in ${clean}`,
+  ];
+}
 
 function buildSequentialEdges(nodes: CurriculumNode[]) {
   const rootNodes = nodes.filter((n) => n.parent === null);
@@ -602,17 +668,102 @@ Notes on **${tpl.title}**.
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
+    const action = typeof body.action === "string" ? body.action : "generate";
     const topicRaw = typeof body.topic === "string" ? body.topic.trim() : "";
     const presetKey = typeof body.presetKey === "string" ? body.presetKey : "";
     const preSurvey: PreSurveyData | undefined = body.preSurvey;
     const fileContext: string =
       typeof body.fileContext === "string" ? body.fileContext.trim() : "";
 
+    const apiKey = (
+      process.env.AI_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      ""
+    ).trim();
+
+    // Dynamic Prerequisite Discovery for ANY topic
+    if (action === "prereqs") {
+      const targetTopic =
+        topicRaw ||
+        (presetKey === "posix-shell"
+          ? "How a Command Shell Works"
+          : presetKey === "git-internals"
+          ? "How Git Saves Your Code"
+          : presetKey === "tcp-http"
+          ? "How Web Servers Talk to Browsers"
+          : "General Topic");
+
+      if (apiKey) {
+        const geminiModels = [
+          "gemini-3.5-flash-lite",
+          "gemini-flash-lite-latest",
+          "gemini-3.5-flash",
+        ];
+        for (const modelName of geminiModels) {
+          try {
+            const res = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents: [
+                    {
+                      role: "user",
+                      parts: [
+                        {
+                          text: `List 4 short, plain-English prerequisite or foundational concepts (2-5 words each) that someone learning "${targetTopic}" might already know. Respond ONLY with JSON: { "prerequisites": ["...", "...", "...", "..."] }`,
+                        },
+                      ],
+                    },
+                  ],
+                  generationConfig: {
+                    responseMimeType: "application/json",
+                    temperature: 0.2,
+                  },
+                }),
+              }
+            );
+            if (res.ok) {
+              const data = await res.json();
+              const rawText = (data?.candidates?.[0]?.content?.parts ?? [])
+                .map((p: { text?: string }) => p.text ?? "")
+                .join("\n")
+                .trim();
+              const match = rawText.match(/\{[\s\S]*\}/);
+              if (match) {
+                const parsed = JSON.parse(match[0]);
+                if (
+                  Array.isArray(parsed.prerequisites) &&
+                  parsed.prerequisites.length >= 2
+                ) {
+                  return NextResponse.json({
+                    prerequisites: parsed.prerequisites
+                      .map(String)
+                      .slice(0, 4),
+                    source: "live_ai",
+                  });
+                }
+              }
+            }
+          } catch {
+            // Fall through to next model or fallback
+          }
+        }
+      }
+
+      return NextResponse.json({
+        prerequisites: buildFallbackPrerequisites(targetTopic),
+        source: "fallback",
+      });
+    }
+
     if (presetKey === "posix-shell") {
       const calibrated = applyPreSurveyCalibration(
         INITIAL_APP_STATE,
         preSurvey,
-        "Build a POSIX Tiny Shell in Python"
+        "How a Command Shell Works"
       );
       return NextResponse.json({
         state: calibrated,
@@ -640,8 +791,8 @@ export async function POST(req: NextRequest) {
         },
         preSurvey,
         presetKey === "tcp-http"
-          ? "HTTP Server over TCP Sockets"
-          : "How Git Stores Commits & Branches"
+          ? "How Web Servers Talk to Browsers"
+          : "How Git Saves Your Code"
       );
       return NextResponse.json({
         state,
@@ -652,13 +803,6 @@ export async function POST(req: NextRequest) {
         },
       });
     }
-
-    const apiKey = (
-      process.env.AI_API_KEY ||
-      process.env.GEMINI_API_KEY ||
-      process.env.GOOGLE_API_KEY ||
-      ""
-    ).trim();
 
     if (!apiKey) {
       return NextResponse.json({

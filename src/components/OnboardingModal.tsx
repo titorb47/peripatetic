@@ -2,21 +2,19 @@
 
 import React, { useState } from "react";
 import {
-  Terminal,
   Sparkles,
   Upload,
   ShieldAlert,
   Play,
   BookOpen,
   ArrowRight,
+  ArrowLeft,
   Compass,
   Zap,
-  Network,
-  GitCommit,
   FileText,
-  SlidersHorizontal,
   Star,
   Check,
+  Plus,
 } from "lucide-react";
 import { KeptFileItem, PreSurveyData } from "@/types/schema";
 
@@ -35,45 +33,8 @@ interface OnboardingModalProps {
   onOpenSecurityModal: () => void;
   isGeneratingCurriculum: boolean;
   keptFiles: KeptFileItem[];
+  masteredNodeTitles: string[];
 }
-
-const FEATURED_PATHS = [
-  {
-    key: "posix-shell",
-    badge: "Flagship Demo",
-    badgeColor: "bg-cyan-500/20 text-cyan-300 border-cyan-500/40",
-    title: "How a Command Shell Works",
-    description:
-      "Learn how your computer reads commands, starts programs, and connects pipes.",
-    icon: Terminal,
-  },
-  {
-    key: "git-internals",
-    badge: "Version Control",
-    badgeColor: "bg-purple-500/20 text-purple-300 border-purple-500/40",
-    title: "How Git Saves Your Code",
-    description:
-      "Understand staging, commits, branches, and merges without memorizing magic commands.",
-    icon: GitCommit,
-  },
-  {
-    key: "tcp-http",
-    badge: "Web & Networking",
-    badgeColor: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
-    title: "How Web Servers Talk to Browsers",
-    description:
-      "Walk through how network connections open, read requests, and send back web pages.",
-    icon: Network,
-  },
-];
-
-const PREREQUISITE_OPTIONS = [
-  "Basic files & folders",
-  "Terminal / CLI basics",
-  "Variables & loops",
-  "Git add & commit",
-  "How websites load",
-];
 
 export function OnboardingModal({
   isOpen,
@@ -85,10 +46,17 @@ export function OnboardingModal({
   onOpenSecurityModal,
   isGeneratingCurriculum,
   keptFiles,
+  masteredNodeTitles,
 }: OnboardingModalProps) {
+  const [step, setStep] = useState<"topic" | "survey">("topic");
   const [customTopic, setCustomTopic] = useState("");
   const [selectedFileContext, setSelectedFileContext] = useState("");
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+
+  // Dynamic Prerequisites fetched for the chosen topic
+  const [dynamicPrereqs, setDynamicPrereqs] = useState<string[]>([]);
+  const [isLoadingPrereqs, setIsLoadingPrereqs] = useState(false);
+  const [customPrereqInput, setCustomPrereqInput] = useState("");
 
   // Pre-Learning Survey State
   const [experienceLevel, setExperienceLevel] = useState<
@@ -102,11 +70,53 @@ export function OnboardingModal({
 
   if (!isOpen) return null;
 
-  const currentPreSurvey: PreSurveyData = {
-    experienceLevel,
-    knownPrerequisites,
-    preferredDepth,
-    confidenceBefore,
+  // Move from Step 1 (Topic) -> Step 2 (Dynamic Pre-Survey for that Topic)
+  const proceedToPreSurvey = async (
+    topicToLearn: string,
+    fileCtx = "",
+    fileName: string | null = null
+  ) => {
+    const clean = topicToLearn.trim();
+    if (!clean) return;
+
+    setCustomTopic(clean);
+    setSelectedFileContext(fileCtx);
+    setSelectedFileName(fileName);
+    setKnownPrerequisites([...masteredNodeTitles]);
+    setStep("survey");
+    setIsLoadingPrereqs(true);
+
+    try {
+      const res = await fetch("/api/curriculum", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "prereqs",
+          topic: clean,
+        }),
+      });
+      const data = await res.json();
+      const fetched: string[] = Array.isArray(data.prerequisites)
+        ? data.prerequisites
+        : [];
+      const combined = Array.from(
+        new Set([...masteredNodeTitles, ...fetched])
+      );
+      setDynamicPrereqs(combined);
+    } catch {
+      setDynamicPrereqs(
+        Array.from(
+          new Set([
+            ...masteredNodeTitles,
+            `What "${clean}" is used for`,
+            `Basic terms of ${clean}`,
+            `A simple example of ${clean}`,
+          ])
+        )
+      );
+    } finally {
+      setIsLoadingPrereqs(false);
+    }
   };
 
   const togglePrereq = (item: string) => {
@@ -115,81 +125,213 @@ export function OnboardingModal({
     );
   };
 
-  const handleCustomSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customTopic.trim()) return;
-    await onSelectCurriculum(
-      "",
-      customTopic.trim(),
-      currentPreSurvey,
-      selectedFileContext
-    );
+  const handleAddCustomPrereq = () => {
+    const val = customPrereqInput.trim();
+    if (!val) return;
+    if (!dynamicPrereqs.includes(val)) {
+      setDynamicPrereqs((prev) => [...prev, val]);
+    }
+    if (!knownPrerequisites.includes(val)) {
+      setKnownPrerequisites((prev) => [...prev, val]);
+    }
+    setCustomPrereqInput("");
   };
 
-  const handlePromptFromFile = async (promptText: string, file: KeptFileItem) => {
-    setCustomTopic(promptText);
-    setSelectedFileContext(file.snippet);
-    setSelectedFileName(file.filename);
-    await onSelectCurriculum("", promptText, currentPreSurvey, file.snippet);
+  const handleFinalStart = async () => {
+    const preSurvey: PreSurveyData = {
+      experienceLevel,
+      knownPrerequisites,
+      preferredDepth,
+      confidenceBefore,
+    };
+    await onSelectCurriculum("", customTopic, preSurvey, selectedFileContext);
+    setStep("topic");
   };
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 overflow-y-auto">
-      <div className="relative w-full max-w-4xl rounded-3xl border border-slate-800 bg-slate-900/95 text-slate-100 shadow-2xl overflow-hidden my-auto">
-        {/* Clean, Welcoming Header */}
-        <div className="border-b border-slate-800 bg-gradient-to-r from-slate-950 via-cyan-950/30 to-slate-950 px-6 py-4">
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-400">
-                <Compass className="h-5 w-5" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold tracking-tight text-slate-100">
-                  What would you like to learn today?
-                </h2>
-                <p className="text-xs text-slate-400">
-                  Set your starting level, pick a prompt from your kept files, or type any topic.
-                </p>
-              </div>
+      <div className="relative w-full max-w-2xl rounded-3xl border border-slate-800 bg-slate-900/95 text-slate-100 shadow-2xl overflow-hidden my-auto">
+        {/* Minimal Header */}
+        <div className="border-b border-slate-800 bg-slate-950/80 px-6 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-400">
+              <Compass className="h-5 w-5" />
             </div>
-
-            <button
-              onClick={onClose}
-              className="rounded-xl border border-slate-700 bg-slate-800/80 px-3.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 hover:text-white transition-colors"
-            >
-              Back to Current Map &rarr;
-            </button>
+            <div>
+              <h2 className="text-base font-bold text-slate-100">
+                {step === "topic"
+                  ? "What would you like to learn?"
+                  : `Quick Check: ${customTopic}`}
+              </h2>
+              <p className="text-xs text-slate-400">
+                {step === "topic"
+                  ? "Type any topic or pick a prompt from the files you keep."
+                  : "Tell us what you already know so we can size and tailor your steps."}
+              </p>
+            </div>
           </div>
+
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+          >
+            Close
+          </button>
         </div>
 
-        {/* Main Modal Body */}
-        <div className="p-6 space-y-5 max-h-[82vh] overflow-y-auto">
-          {/* 1. Quick Pre-Learning Survey (Tailors task difficulty & skips steps you already know) */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-3.5">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2 text-xs font-bold text-emerald-300">
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-                <span>Step 1: Quick Pre-Check (Tailors Tasks to Your Level)</span>
+        {/* STEP 1: CLEAN TOPIC & KEPT FILES PICKER */}
+        {step === "topic" && (
+          <div className="p-6 space-y-6">
+            {/* 1. Single Clean Topic Input */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                proceedToPreSurvey(customTopic);
+              }}
+              className="flex flex-col sm:flex-row gap-2.5"
+            >
+              <input
+                type="text"
+                value={customTopic}
+                onChange={(e) => setCustomTopic(e.target.value)}
+                placeholder='Type any topic (e.g., "How do I git commit?", "Photosynthesis", "Baking sourdough")...'
+                className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+                autoFocus
+              />
+              <button
+                type="submit"
+                disabled={!customTopic.trim()}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-5 py-3 text-xs font-bold text-slate-950 hover:bg-cyan-400 disabled:opacity-40 transition-colors shrink-0"
+              >
+                <span>Continue</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </form>
+
+            {/* 2. Prompts Generated from Real Kept Files (`kept-notes/` + Uploaded Notes) */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                  Prompts from Your Kept Files
+                </span>
+                <button
+                  type="button"
+                  onClick={onTriggerFileUpload}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-[11px] font-medium text-cyan-300 hover:border-cyan-500/50 transition-colors"
+                >
+                  <Upload className="w-3 h-3" />
+                  Upload Note (.md / .txt)
+                </button>
               </div>
-              <span className="text-[11px] text-slate-400">
-                {experienceLevel === "beginner"
-                  ? "Starts at Step 1 with everyday analogies"
-                  : experienceLevel === "intermediate"
-                  ? "Pre-completes Step 1 so you skip the intro"
-                  : "Pre-completes Steps 1–2 for a faster challenge"}
-              </span>
+
+              {keptFiles.length === 0 ? (
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-xs text-slate-400 text-center">
+                  No kept files yet. Upload a <code>.md</code> or{" "}
+                  <code>.txt</code> note to generate learning prompts from it.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {keptFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-2.5"
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-200 truncate">
+                        <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        <span className="truncate">{file.filename}</span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {file.suggestedPrompts.map((prompt) => (
+                          <button
+                            key={prompt}
+                            type="button"
+                            onClick={() =>
+                              proceedToPreSurvey(
+                                prompt,
+                                file.snippet,
+                                file.filename
+                              )
+                            }
+                            className="rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1.5 text-xs text-cyan-300 hover:border-cyan-500/50 hover:bg-slate-800 transition-colors text-left flex items-center gap-1.5"
+                          >
+                            <span>{prompt}</span>
+                            <ArrowRight className="w-3 h-3 shrink-0 opacity-70" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {/* Experience Level */}
+            {/* 3. Subtle Bottom Bar for Hackathon Demo & Safety */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800/80 text-xs">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRunDemoSeed();
+                    onClose();
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/20 transition-colors"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  Load Live Demo
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onTestMaliciousInjection();
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/20 transition-colors"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                  Test Safety Guard
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenSecurityModal();
+                }}
+                className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 underline"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                Safety &amp; Rubric Info
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 2: DYNAMIC PRE-SURVEY TAILORED TO CHOSEN TOPIC */}
+        {step === "survey" && (
+          <div className="p-6 space-y-5">
+            {selectedFileName && (
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 px-3 py-2 text-xs text-cyan-200 flex items-center gap-2">
+                <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span>
+                  Using context from your file: <strong>{selectedFileName}</strong>
+                </span>
+              </div>
+            )}
+
+            {/* Question 1: Familiarity & Path Size */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-semibold text-slate-300">
-                  How familiar are you with this?
+                <label className="block text-xs font-semibold text-slate-200">
+                  1. Your familiarity with this topic
                 </label>
                 <div className="grid grid-cols-3 gap-1.5">
                   {[
                     { id: "beginner", label: "Brand New" },
-                    { id: "intermediate", label: "Some Basics" },
+                    { id: "intermediate", label: "Know Basics" },
                     { id: "advanced", label: "Experienced" },
                   ].map((lvl) => (
                     <button
@@ -200,10 +342,10 @@ export function OnboardingModal({
                           lvl.id as "beginner" | "intermediate" | "advanced"
                         )
                       }
-                      className={`rounded-xl border px-2 py-1.5 text-[11px] font-semibold transition-all ${
+                      className={`rounded-xl border py-2 text-xs font-semibold transition-all ${
                         experienceLevel === lvl.id
                           ? "border-cyan-500/60 bg-cyan-500/20 text-cyan-200"
-                          : "border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
+                          : "border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200"
                       }`}
                     >
                       {lvl.label}
@@ -212,53 +354,23 @@ export function OnboardingModal({
                 </div>
               </div>
 
-              {/* Dynamic Path Length */}
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-semibold text-slate-300">
-                  Number of steps (Dynamic)
+                <label className="block text-xs font-semibold text-slate-200">
+                  2. Starting confidence ({confidenceBefore}/5)
                 </label>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {[
-                    { id: "dynamic", label: "Auto-Fit" },
-                    { id: "short", label: "Short (3)" },
-                    { id: "deep", label: "Deep (6-7)" },
-                  ].map((d) => (
-                    <button
-                      key={d.id}
-                      type="button"
-                      onClick={() =>
-                        setPreferredDepth(d.id as "dynamic" | "short" | "deep")
-                      }
-                      className={`rounded-xl border px-2 py-1.5 text-[11px] font-semibold transition-all ${
-                        preferredDepth === d.id
-                          ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-200"
-                          : "border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      {d.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Starting Confidence */}
-              <div className="space-y-1.5">
-                <label className="block text-[11px] font-semibold text-slate-300">
-                  Confidence right now ({confidenceBefore}/5)
-                </label>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5">
                   {[1, 2, 3, 4, 5].map((score) => (
                     <button
                       key={score}
                       type="button"
                       onClick={() => setConfidenceBefore(score)}
-                      className={`flex-1 rounded-xl border py-1.5 text-[11px] font-bold transition-all flex items-center justify-center gap-0.5 ${
+                      className={`flex-1 rounded-xl border py-2 text-xs font-bold transition-all flex items-center justify-center gap-1 ${
                         confidenceBefore >= score
                           ? "border-amber-500/60 bg-amber-500/20 text-amber-300"
-                          : "border-slate-800 bg-slate-900 text-slate-500"
+                          : "border-slate-800 bg-slate-950 text-slate-500"
                       }`}
                     >
-                      <Star className="w-2.5 h-2.5 fill-current" />
+                      <Star className="w-3 h-3 fill-current" />
                       {score}
                     </button>
                   ))}
@@ -266,214 +378,121 @@ export function OnboardingModal({
               </div>
             </div>
 
-            {/* Prerequisites already known */}
-            <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-800/80">
-              <span className="text-[11px] text-slate-400">
-                Things you already know:
+            {/* Question 3: Dynamic Prerequisites Generated for This Topic */}
+            <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-slate-200">
+                  3. Check anything you already know about{" "}
+                  <span className="text-cyan-300">{customTopic}</span>
+                </label>
+                {isLoadingPrereqs && (
+                  <span className="text-[11px] text-cyan-400 animate-pulse">
+                    Finding prerequisites...
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {dynamicPrereqs.map((item) => {
+                  const active = knownPrerequisites.includes(item);
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => togglePrereq(item)}
+                      className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs transition-colors ${
+                        active
+                          ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-200 font-medium"
+                          : "border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      {active && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                      {item}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Add your own known concept */}
+              <div className="flex gap-2 pt-2">
+                <input
+                  type="text"
+                  value={customPrereqInput}
+                  onChange={(e) => setCustomPrereqInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddCustomPrereq();
+                    }
+                  }}
+                  placeholder="Or type something else you already know..."
+                  className="flex-1 rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddCustomPrereq}
+                  className="inline-flex items-center gap-1 rounded-xl border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {/* Question 4: Path Depth */}
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-xs font-semibold text-slate-300">
+                4. Path length:
               </span>
-              {PREREQUISITE_OPTIONS.map((item) => {
-                const active = knownPrerequisites.includes(item);
-                return (
+              <div className="flex items-center gap-1.5">
+                {[
+                  { id: "dynamic", label: "Auto-Fit (Recommended)" },
+                  { id: "short", label: "Quick (3 steps)" },
+                  { id: "deep", label: "Deep Dive (6–7 steps)" },
+                ].map((d) => (
                   <button
-                    key={item}
+                    key={d.id}
                     type="button"
-                    onClick={() => togglePrereq(item)}
-                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
-                      active
-                        ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-200 font-medium"
-                        : "border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
+                    onClick={() =>
+                      setPreferredDepth(d.id as "dynamic" | "short" | "deep")
+                    }
+                    className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
+                      preferredDepth === d.id
+                        ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-200"
+                        : "border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200"
                     }`}
                   >
-                    {active && <Check className="w-3 h-3 text-emerald-400" />}
-                    {item}
+                    {d.label}
                   </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 2. Custom Topic Input */}
-          <form
-            onSubmit={handleCustomSubmit}
-            className="rounded-2xl border border-cyan-500/30 bg-slate-950/90 p-4 space-y-3"
-          >
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className="flex items-center gap-2 text-xs font-bold text-cyan-300">
-                <Sparkles className="w-3.5 h-3.5" />
-                Step 2: Type Anything You Want to Learn
-              </label>
-              {selectedFileName && (
-                <span className="text-[11px] text-emerald-300 font-mono">
-                  Using context from: {selectedFileName}
-                </span>
-              )}
+                ))}
+              </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-2.5">
-              <input
-                type="text"
-                value={customTopic}
-                onChange={(e) => setCustomTopic(e.target.value)}
-                placeholder='e.g., "How do I git commit?", "How Neural Networks Learn", "Photosynthesis", "Public Key Encryption"...'
-                className="flex-1 rounded-xl border border-slate-800 bg-slate-900 px-4 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
-              />
+            {/* Back / Build Map Buttons */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
               <button
-                type="submit"
-                disabled={isGeneratingCurriculum || !customTopic.trim()}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-cyan-400 disabled:opacity-50 transition-colors shrink-0 shadow-lg shadow-cyan-950/50"
+                type="button"
+                onClick={() => setStep("topic")}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-700"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                Back
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFinalStart}
+                disabled={isGeneratingCurriculum}
+                className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-cyan-400 disabled:opacity-50 transition-colors shadow-lg shadow-cyan-950/50"
               >
                 <Zap className="w-4 h-4 fill-current" />
-                {isGeneratingCurriculum ? "Building Path..." : "Start Learning"}
+                {isGeneratingCurriculum
+                  ? "Building Your Map..."
+                  : "Build My Learning Map"}
               </button>
-            </div>
-          </form>
-
-          {/* 3. Prompts Based on the Files We Keep */}
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-cyan-400" />
-                <h3 className="text-xs font-bold text-slate-200">
-                  Suggested Prompts from Your Kept Files &amp; Notes
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={onTriggerFileUpload}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold text-cyan-300 hover:bg-cyan-500/20 transition-colors"
-              >
-                <Upload className="w-3 h-3" />
-                Add / Upload a Note (.md or .txt)
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {keptFiles.map((file) => (
-                <div
-                  key={file.id}
-                  className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3.5 flex flex-col justify-between space-y-2.5"
-                >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200 truncate">
-                      <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                      <span className="truncate">{file.filename}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 line-clamp-2">
-                      {file.snippet}
-                    </p>
-                  </div>
-
-                  <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
-                    <div className="text-[10px] font-semibold text-slate-400">
-                      Click a prompt from this file:
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      {file.suggestedPrompts.map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          onClick={() => handlePromptFromFile(prompt, file)}
-                          className="text-left rounded-lg border border-slate-800 bg-slate-900/90 px-2.5 py-1.5 text-[11px] font-medium text-cyan-300 hover:border-cyan-500/50 hover:bg-slate-800 transition-colors flex items-center justify-between gap-1"
-                        >
-                          <span className="truncate">{prompt}</span>
-                          <ArrowRight className="w-3 h-3 shrink-0" />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
-
-          {/* 4. Featured Ready-to-Go Paths */}
-          <div className="space-y-2.5">
-            <h3 className="text-xs font-bold text-slate-300">
-              Featured Learning Paths
-            </h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {FEATURED_PATHS.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <div
-                    key={item.key}
-                    onClick={() =>
-                      onSelectCurriculum(item.key, undefined, currentPreSurvey)
-                    }
-                    className="group cursor-pointer rounded-2xl border border-slate-800 bg-slate-950/70 p-4 hover:border-cyan-500/60 hover:bg-slate-900 transition-all flex flex-col justify-between space-y-3"
-                  >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900 border border-slate-800 text-cyan-400">
-                          <Icon className="w-3.5 h-3.5" />
-                        </div>
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${item.badgeColor}`}
-                        >
-                          {item.badge}
-                        </span>
-                      </div>
-
-                      <h4 className="text-sm font-bold text-slate-100 group-hover:text-cyan-300 transition-colors">
-                        {item.title}
-                      </h4>
-                      <p className="text-xs text-slate-400 leading-relaxed">
-                        {item.description}
-                      </p>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-semibold text-cyan-400">
-                      <span>Start Path</span>
-                      <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 5. Compact Bottom Bar: Live Demo, Security Misuse Test & Info */}
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  onRunDemoSeed();
-                  onClose();
-                }}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/50 bg-amber-500/15 px-3 py-1.5 text-xs font-bold text-amber-300 hover:bg-amber-500/25 transition-colors"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" />
-                Run Live Demo
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onTestMaliciousInjection();
-                }}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/25 transition-colors"
-              >
-                <ShieldAlert className="w-3.5 h-3.5" />
-                Test Prompt-Injection Guard
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                onOpenSecurityModal();
-              }}
-              className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 underline"
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              Safety &amp; Rubric Info
-            </button>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
