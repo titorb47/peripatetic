@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ShellFromScratch // Feynman DAG Learning Platform",
+  title: "Peripatetic // First-Principles AI Learning Platform",
   description:
-    "Learn POSIX systems programming ('Build a POSIX Tiny Shell in Python') via a Directed Acyclic Graph curriculum, strict Feynman-technique AI tutoring, dynamic remediation branching, and Obsidian Markdown vault exports.",
+    "Peripatetic: Turn any topic or personal study notes into an interactive Directed Acyclic Graph (DAG) curriculum with Socratic AI tutoring, dynamic remediation branching, and Obsidian Markdown vault exports.",
 };
 
 export default function RootLayout({

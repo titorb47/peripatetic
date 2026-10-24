@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import {
-  KeyRound,
   FileText,
   Sparkles,
   ArrowRight,
@@ -20,6 +19,8 @@ import {
   Hammer,
   HelpCircle,
   X,
+  Clock,
+  RotateCcw,
 } from "lucide-react";
 import { KeptFileItem, PreSurveyData, SuggestedProject } from "@/types/schema";
 
@@ -39,6 +40,9 @@ interface SessionOnboardingModalProps {
   isGeneratingCurriculum: boolean;
   activeApiKey: string;
   onSaveApiKey: (key: string) => void;
+  sessionId: string;
+  isBlankSlateVerified: boolean;
+  onResetToBlankSlate: () => void;
 }
 
 export function SessionOnboardingModal({
@@ -51,6 +55,9 @@ export function SessionOnboardingModal({
   isGeneratingCurriculum,
   activeApiKey,
   onSaveApiKey,
+  sessionId,
+  isBlankSlateVerified,
+  onResetToBlankSlate,
 }: SessionOnboardingModalProps) {
   // Step 1: "key" -> Step 2: "memory" -> Step 3: "topic" -> Step 4: "survey"
   const [currentStep, setCurrentStep] = useState<
@@ -92,26 +99,22 @@ export function SessionOnboardingModal({
   const [confidenceBefore, setConfidenceBefore] = useState<number>(2);
   const [knownPrerequisites, setKnownPrerequisites] = useState<string[]>([]);
 
-  // Sync enteredKey if activeApiKey changes
+  // Sync enteredKey with activeApiKey in current session memory only
   useEffect(() => {
-    if (activeApiKey) {
-      setEnteredKey(activeApiKey);
-    }
+    setEnteredKey(activeApiKey || "");
   }, [activeApiKey]);
 
-  // Initial step determination: if API key already saved, start at "memory" or "topic"
+  // Every fresh session starts at Step 1 ("key"); only jump to "memory" if key was already verified during this active tab session
   useEffect(() => {
     if (isOpen) {
-      const savedKey =
-        activeApiKey ||
-        (typeof window !== "undefined"
-          ? localStorage.getItem("gemini_api_key_v1") || ""
-          : "");
-      if (savedKey.trim()) {
-        setEnteredKey(savedKey.trim());
-        // User already has a key, start at memory choice
+      if (activeApiKey.trim()) {
+        setEnteredKey(activeApiKey.trim());
         setCurrentStep("memory");
       } else {
+        setEnteredKey("");
+        setKeyValidationStatus(null);
+        setSelectedFile(null);
+        setCustomTopic("");
         setCurrentStep("key");
       }
     }
@@ -147,7 +150,7 @@ export function SessionOnboardingModal({
         onSaveApiKey(key);
         setKeyValidationStatus({
           valid: true,
-          message: "API Key verified successfully with Google Gemini!",
+          message: `API Key verified with Google Gemini (${data.model || "gemini-3.8-flash"})!`,
         });
         setTimeout(() => {
           setCurrentStep("memory");
@@ -161,7 +164,6 @@ export function SessionOnboardingModal({
         });
       }
     } catch {
-      // In case of network error, allow proceeding if key matches pattern
       if (key.startsWith("AIza") || key.length > 20) {
         onSaveApiKey(key);
         setCurrentStep("memory");
@@ -186,10 +188,9 @@ export function SessionOnboardingModal({
     setUploadError(null);
     try {
       await onUploadNoteFile(file);
-      // Wait a moment for keptFiles to refresh
       setTimeout(() => {
         setIsUploadingFile(false);
-      }, 500);
+      }, 400);
     } catch (err) {
       setUploadError(
         err instanceof Error ? err.message : "Failed to upload note file"
@@ -328,6 +329,15 @@ export function SessionOnboardingModal({
                 : "3/3"}
             </div>
             <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-cyan-400">
+                  Peripatetic
+                </span>
+                <span className="text-slate-600">&bull;</span>
+                <span className="text-[11px] font-mono text-emerald-400">
+                  Session #{sessionId}
+                </span>
+              </div>
               <h2 className="text-base font-bold text-slate-100">
                 {currentStep === "key" && "Step 1: Connect Your Gemini API Key"}
                 {currentStep === "memory" &&
@@ -337,45 +347,90 @@ export function SessionOnboardingModal({
                 {currentStep === "survey" &&
                   `Plan Your Project & Milestones: ${customTopic}`}
               </h2>
-              <p className="text-xs text-slate-400">
-                {currentStep === "key" &&
-                  "Your key stays strictly private in your browser session."}
-                {currentStep === "memory" &&
-                  "Seed your learning DAG from an Obsidian note or begin with a clean slate."}
-                {currentStep === "topic" &&
-                  "Enter any skill or concept to turn into an interactive learning DAG."}
-                {currentStep === "survey" &&
-                  "Pick a hands-on project to build and check what you already know."}
-              </p>
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="rounded-xl border border-slate-700 bg-slate-800/80 p-2 text-slate-400 hover:text-white transition-colors"
-            title="Close modal"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onResetToBlankSlate();
+                setEnteredKey("");
+                setKeyValidationStatus(null);
+                setSelectedFile(null);
+                setCustomTopic("");
+                setCurrentStep("key");
+              }}
+              className="inline-flex items-center gap-1 rounded-xl border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-[11px] font-medium text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+              title="Wipe current session and verify a fresh blank slate"
+            >
+              <RotateCcw className="w-3 h-3 text-cyan-400" />
+              <span>Reset Blank Slate</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-slate-700 bg-slate-800/80 p-2 text-slate-400 hover:text-white transition-colors"
+              title="Close modal"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* BLANK SLATE VERIFICATION & PATIENCE BANNER */}
+        <div className="border-b border-slate-800/90 bg-slate-950/60 px-6 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+          <div className="flex items-center gap-2 text-emerald-300 font-medium">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>
+              <strong>Blank Slate Verified:</strong>{" "}
+              {isBlankSlateVerified
+                ? "Fresh user session (0 pre-loaded keys, 0 pre-loaded files)"
+                : `Active session (${
+                    activeApiKey ? "1 key in memory" : "0 keys"
+                  }, ${keptFiles.length} uploaded file${
+                    keptFiles.length === 1 ? "" : "s"
+                  })`}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 text-amber-300 font-medium">
+            <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>
+              Please be patient: API key &amp; AI generation steps can take 10–30s.
+            </span>
+          </div>
         </div>
 
         {/* ================= STEP 1: UPLOAD / ENTER GEMINI API KEY ================= */}
         {currentStep === "key" && (
           <div className="p-6 space-y-5">
-            <div className="rounded-2xl border border-cyan-500/30 bg-cyan-950/20 p-4 space-y-3">
+            <div className="rounded-2xl border border-cyan-500/30 bg-cyan-950/20 p-4 space-y-2">
               <div className="flex items-start gap-3">
                 <ShieldCheck className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
                 <div className="space-y-1 text-xs leading-relaxed text-slate-200">
                   <div className="font-bold text-slate-100">
-                    Client-Side Security Guarantee
+                    Isolated Blank-Slate Session Guarantee
                   </div>
                   <p>
-                    Because this site runs publicly on Vercel, your Gemini API
-                    key is stored only in your browser&apos;s{" "}
-                    <code>localStorage</code>. It is never logged or stored on
-                    any database.
+                    Every visitor to <strong>Peripatetic</strong> begins with a
+                    completely blank slate. Your Gemini API key is held only in
+                    your current browser session memory—never saved to any
+                    shared database or server disk.
                   </p>
                 </div>
+              </div>
+            </div>
+
+            {/* Patience Warning Box */}
+            <div className="rounded-xl border border-amber-500/40 bg-amber-950/25 px-3.5 py-2.5 text-xs text-amber-200 flex items-start gap-2.5">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <strong>Heads up — Please be patient:</strong> Connecting and
+                verifying your Gemini API key (and later generating your custom
+                learning map) makes live calls to Google Gemini and may take{" "}
+                <strong>10–30 seconds</strong>. Please wait for each step to
+                finish!
               </div>
             </div>
 
@@ -384,7 +439,7 @@ export function SessionOnboardingModal({
               <div className="font-bold text-slate-200 flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
                   <HelpCircle className="w-4 h-4 text-cyan-400" />
-                  How to get your free Gemini API key:
+                  How to create a free Gemini API key:
                 </span>
                 <a
                   href="https://aistudio.google.com/app/apikey"
@@ -392,13 +447,13 @@ export function SessionOnboardingModal({
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-cyan-400 hover:underline font-semibold"
                 >
-                  <span>Google AI Studio</span>
+                  <span>Open Google AI Studio</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
               <ol className="list-decimal list-inside space-y-1 text-slate-400 pl-1">
                 <li>
-                  Go to{" "}
+                  Visit{" "}
                   <a
                     href="https://aistudio.google.com/app/apikey"
                     target="_blank"
@@ -408,11 +463,12 @@ export function SessionOnboardingModal({
                     aistudio.google.com/app/apikey
                   </a>
                 </li>
-                <li>Sign in with any Google account.</li>
+                <li>Sign in with your Google account.</li>
                 <li>
-                  Click <strong>&quot;Create API key&quot;</strong> and copy it.
+                  Click <strong>&quot;Create API key&quot;</strong> and copy the
+                  generated key.
                 </li>
-                <li>Paste it in the box below to start learning!</li>
+                <li>Paste it below and click Next!</li>
               </ol>
             </div>
 
@@ -477,7 +533,6 @@ export function SessionOnboardingModal({
               <button
                 type="button"
                 onClick={() => {
-                  // Allow continuing in offline/demo mode if user has no key
                   setCurrentStep("memory");
                 }}
                 className="text-xs text-slate-400 hover:text-slate-200 underline"
@@ -492,7 +547,9 @@ export function SessionOnboardingModal({
                 className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-cyan-400 disabled:opacity-50 transition-colors shadow-lg shadow-cyan-950/50"
               >
                 <span>
-                  {isValidatingKey ? "Checking Key..." : "Next: Memory File"}
+                  {isValidatingKey
+                    ? "Verifying Key (Please wait 5–15s)..."
+                    : "Next: Memory File"}
                 </span>
                 <ArrowRight className="w-4 h-4" />
               </button>
@@ -503,18 +560,28 @@ export function SessionOnboardingModal({
         {/* ================= STEP 2: UPLOAD MEMORY FILE OR START FROM SCRATCH ================= */}
         {currentStep === "memory" && (
           <div className="p-6 space-y-6">
+            <div className="rounded-xl border border-amber-500/40 bg-amber-950/25 px-3.5 py-2.5 text-xs text-amber-200 flex items-start gap-2.5">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <strong>Please be patient when uploading a file:</strong> When
+                you upload a <code>.md</code> or <code>.txt</code> memory file,
+                Gemini reads your notes and generates custom study prompts,
+                which can take <strong>10–20 seconds</strong>.
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Option A: Upload Memory / Notes File */}
               <div className="rounded-2xl border border-cyan-500/40 bg-slate-950/80 p-5 space-y-3 flex flex-col justify-between">
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm">
                     <FileText className="w-5 h-5" />
-                    <span>Upload Notes / Memory File</span>
+                    <span>Upload Personal Memory File</span>
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
                     Upload an Obsidian <code>.md</code> or <code>.txt</code> file
-                    containing your prior study notes. The AI will extract
-                    topics and calibrate to your existing knowledge.
+                    containing your personal notes. Peripatetic will extract
+                    topics and calibrate to your notes.
                   </p>
                 </div>
 
@@ -528,7 +595,7 @@ export function SessionOnboardingModal({
                     <Upload className="w-4 h-4 text-cyan-400" />
                     <span>
                       {isUploadingFile
-                        ? "Reading File..."
+                        ? "Analyzing File (Please be patient)..."
                         : "Choose .md / .txt File"}
                     </span>
                   </button>
@@ -543,9 +610,8 @@ export function SessionOnboardingModal({
                     <span>Start From Scratch</span>
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    No notes yet? No problem! Choose any topic from scratch.
-                    We&apos;ll build your foundational mental model step by
-                    step.
+                    No notes to upload? Start with a completely clean slate and
+                    type any topic you want to learn in Step 3.
                   </p>
                 </div>
 
@@ -571,12 +637,18 @@ export function SessionOnboardingModal({
               </div>
             )}
 
-            {/* List of Available Kept Files (if any uploaded) */}
-            {keptFiles.length > 0 && (
+            {/* List of Uploaded Files in This Session */}
+            {keptFiles.length === 0 ? (
+              <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3.5 text-center text-xs text-slate-400">
+                ✓ <strong>0 Memory Files Loaded</strong> — This session is a
+                clean blank slate until you upload a personal file above or
+                click &quot;Start From Scratch&quot;.
+              </div>
+            ) : (
               <div className="space-y-2.5 pt-1">
                 <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
                   <FileText className="w-3.5 h-3.5 text-cyan-400" />
-                  Your Active Memory Files:
+                  Uploaded in Your Current Session ({keptFiles.length}):
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-48 overflow-y-auto">
                   {keptFiles.map((file) => (
@@ -638,6 +710,16 @@ export function SessionOnboardingModal({
         {/* ================= STEP 3: TOPIC PROMPTING ================= */}
         {currentStep === "topic" && (
           <div className="p-6 space-y-6">
+            <div className="rounded-xl border border-amber-500/40 bg-amber-950/25 px-3.5 py-2.5 text-xs text-amber-200 flex items-start gap-2.5">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <strong>Note on AI Generation Time:</strong> After you enter a
+                topic, Gemini will design custom hands-on projects and
+                prerequisite checks for you. This step can take{" "}
+                <strong>10–25 seconds</strong>—please be patient!
+              </div>
+            </div>
+
             {selectedFile && (
               <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 px-3.5 py-2 text-xs text-cyan-200 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 truncate">
@@ -705,7 +787,7 @@ export function SessionOnboardingModal({
             ) : (
               <div className="space-y-2">
                 <span className="text-xs font-semibold text-slate-400">
-                  Or pick a popular starter topic:
+                  Or pick a starter topic to explore:
                 </span>
                 <div className="flex flex-wrap gap-2">
                   {[
@@ -745,6 +827,19 @@ export function SessionOnboardingModal({
         {/* ================= STEP 4: PROJECT PICKER & PRE-SURVEY ================= */}
         {currentStep === "survey" && (
           <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+            {/* Patience Banner for Project & Curriculum Generation */}
+            <div className="rounded-xl border border-amber-500/40 bg-amber-950/25 px-3.5 py-2.5 text-xs text-amber-200 flex items-start gap-2.5">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <strong>Please be patient during AI generation:</strong>{" "}
+                {isLoadingPrereqs
+                  ? "Gemini is currently designing custom projects and prerequisites for your topic (takes ~10–20s)..."
+                  : isGeneratingCurriculum
+                  ? "Gemini is building your multi-step learning DAG and project milestones (takes ~15–30s). Please do not close this window!"
+                  : "Clicking 'Build My Learning Map' below will generate a custom multi-step graph from scratch, which can take 15–30 seconds."}
+              </div>
+            </div>
+
             {/* Question 1: AI-Suggested Projects to Build */}
             <div className="space-y-2.5 rounded-2xl border border-cyan-500/30 bg-slate-950/80 p-4">
               <div className="flex items-center justify-between gap-2">
@@ -756,7 +851,7 @@ export function SessionOnboardingModal({
                 {isLoadingPrereqs && (
                   <span className="text-[11px] text-cyan-400 animate-pulse flex items-center gap-1">
                     <Sparkles className="w-3 h-3" />
-                    AI designing projects...
+                    AI designing projects (please wait)...
                   </span>
                 )}
               </div>
@@ -998,7 +1093,7 @@ export function SessionOnboardingModal({
               >
                 <Sparkles className="w-4 h-4 fill-current" />
                 {isGeneratingCurriculum
-                  ? "Building Your Map..."
+                  ? "Building Your Map (Please wait 15–30s)..."
                   : "Build My Learning Map"}
               </button>
             </div>

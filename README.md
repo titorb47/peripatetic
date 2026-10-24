@@ -22,9 +22,9 @@ Make sure the latest working version is pushed to `main`, the demo or setup inst
 
 ---
 
-## Project Overview: ShellFromScratch // Feynman DAG Learning Platform
+## Project Overview: Peripatetic // First-Principles AI Learning Platform
 
-**ShellFromScratch** is a first-principles learning engine built on the **Feynman Technique** and a **Directed Acyclic Graph (DAG)** curriculum with dynamic prerequisite remediation (`max_branch_depth = 1`) and lossless **Obsidian Vault (`.zip`)** export.
+**Peripatetic** is a first-principles learning engine built on the **Feynman Technique** and a **Directed Acyclic Graph (DAG)** curriculum with dynamic recursive prerequisite remediation and lossless **Obsidian Vault (`.zip`)** export.
 
 - **Flagship Track:** Build a POSIX Tiny Shell in Python (`n1` REPL & `shlex.split` $\rightarrow$ `n2` `os.fork` $\rightarrow$ `n3` `os.execvp` $\rightarrow$ `n4` `os.waitpid` $\rightarrow$ `n5` `os.pipe` & `os.dup2`), plus dynamic side-quest remediation (`n3-b1: What is a File Descriptor?`).
 - **Universal Custom Topic Generator:** Enter any topic (e.g., *"How Git Commit Works"*, *"Transformer Self-Attention"*, *"Public Key Cryptography & TLS"*, *"SQLite B-Tree Engine"*) to generate a custom 5-node DAG without forcing POSIX or Python.
