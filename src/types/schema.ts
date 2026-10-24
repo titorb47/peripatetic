@@ -79,6 +79,8 @@ export interface TutorResponse {
     goal: string;
     practice_task: string;
     misconception_identified: string;
+    verification_criteria?: string[];
+    open_questions?: string[];
   } | null;
   draft_merge_note_md: string | null;
   ai_meta?: {
@@ -165,6 +167,8 @@ export const SpawnBranchSchema = z.object({
   goal: z.string(),
   practice_task: z.string(),
   misconception_identified: z.string(),
+  verification_criteria: z.array(z.string()).optional(),
+  open_questions: z.array(z.string()).optional(),
 });
 
 export const AiMetaSchema = z.object({

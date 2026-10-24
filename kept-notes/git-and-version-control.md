@@ -5,3 +5,4 @@ When you edit files in your working folder, Git does not save them into history 
 
 ## Branching & Merging
 Branches are lightweight pointers to commits. Merging combines two diverging histories using their common ancestor.
+

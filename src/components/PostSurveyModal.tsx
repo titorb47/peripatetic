@@ -54,6 +54,7 @@ export function PostSurveyModal({
   const [submittedResult, setSubmittedResult] = useState<PostSurveyData | null>(
     existingSurvey ?? null
   );
+  const [isEvaluating, setIsEvaluating] = useState(false);
 
   useEffect(() => {
     if (existingSurvey) {
@@ -68,22 +69,54 @@ export function PostSurveyModal({
     firstNode?.context.open_questions?.[0] ||
     `What is the most common mistake someone might make with ${topicTitle}, and how would you avoid it?`;
 
-  const handleEvaluateSurvey = (e: React.FormEvent) => {
+  const handleEvaluateSurvey = async (e: React.FormEvent) => {
     e.preventDefault();
     const synTrim = synthesisAnswer.trim();
     const appTrim = appliedScenarioAnswer.trim();
-    const passed = synTrim.length >= 15 && appTrim.length >= 10;
-    const delta = confidenceAfter - confidenceBefore;
+    setIsEvaluating(true);
 
-    const feedbackSummary = passed
-      ? `Great job! You connected "${
-          firstNode?.title || "the basics"
-        }" all the way to "${
-          lastNode?.title || "the big picture"
-        }" in your own words. Your confidence grew from ${confidenceBefore}/5 to ${confidenceAfter}/5 (${
-          delta >= 0 ? `+${delta}` : delta
-        }).`
-      : `Almost there! Add a sentence or two more connecting the big picture and the real-world question so we know the concept truly clicked.`;
+    let passed = synTrim.length >= 12 && appTrim.length >= 8;
+    let feedbackSummary = "";
+
+    try {
+      const res = await fetch("/api/curriculum", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "evaluate_survey",
+          topicTitle,
+          synthesisAnswer: synTrim,
+          appliedScenarioAnswer: appTrim,
+          confidenceBefore,
+          confidenceAfter,
+          nodeTitles: rootNodes.map((n) => n.title),
+        }),
+      });
+      const data = await res.json();
+      if (typeof data.passedCheck === "boolean") {
+        passed = data.passedCheck;
+      }
+      if (typeof data.feedbackSummary === "string" && data.feedbackSummary) {
+        feedbackSummary = data.feedbackSummary;
+      }
+    } catch {
+      // Fallback if offline
+    } finally {
+      setIsEvaluating(false);
+    }
+
+    if (!feedbackSummary) {
+      const delta = confidenceAfter - confidenceBefore;
+      feedbackSummary = passed
+        ? `Great job! You connected "${
+            firstNode?.title || "the basics"
+          }" all the way to "${
+            lastNode?.title || "the big picture"
+          }" in your own words. Your confidence grew from ${confidenceBefore}/5 to ${confidenceAfter}/5 (${
+            delta >= 0 ? `+${delta}` : delta
+          }).`
+        : `Add a sentence or two more connecting the big picture and the real-world question so we can verify your understanding.`;
+    }
 
     const result: PostSurveyData = {
       completedAt: new Date().toISOString(),
@@ -134,29 +167,9 @@ export function PostSurveyModal({
         >
           {/* Question 1: Big-Picture Synthesis */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <label className="text-xs font-bold text-slate-100">
-                1. Connect the Dots (Big Picture)
-              </label>
-              <button
-                type="button"
-                onClick={() => {
-                  setSynthesisAnswer(
-                    `Starting from ${
-                      firstNode?.title || "the foundation"
-                    }, each step builds toward ${
-                      lastNode?.title || "the full workflow"
-                    } so that inputs are cleanly transformed into a reliable result.`
-                  );
-                  setAppliedScenarioAnswer(
-                    `If a step is skipped or given an unexpected input, we can trace the state transition step-by-step to spot and fix the issue immediately.`
-                  );
-                }}
-                className="text-[11px] font-mono text-cyan-400 hover:underline"
-              >
-                Fill Example Answers
-              </button>
-            </div>
+            <label className="block text-xs font-bold text-slate-100">
+              1. Connect the Dots (Big Picture)
+            </label>
             <p className="text-xs text-slate-400">
               In 1–2 plain sentences, how does{" "}
               <span className="text-cyan-300 font-medium">
@@ -300,10 +313,11 @@ export function PostSurveyModal({
           <div className="flex justify-end gap-2 pt-1">
             <button
               type="submit"
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 transition-colors shadow-lg shadow-emerald-950/50"
+              disabled={isEvaluating}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 transition-colors shadow-lg shadow-emerald-950/50"
             >
               <Sparkles className="w-4 h-4" />
-              Check My Learning
+              {isEvaluating ? "AI Checking..." : "Check My Learning"}
             </button>
           </div>
         </form>

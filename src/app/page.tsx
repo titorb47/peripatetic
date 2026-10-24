@@ -61,199 +61,8 @@ import { OnboardingModal } from "@/components/OnboardingModal";
 import { PostSurveyModal } from "@/components/PostSurveyModal";
 
 const STORAGE_KEY = "shell_from_scratch_feynman_dag_v2";
-const KEPT_FILES_KEY = "shell_from_scratch_kept_files_v1";
-
-function extractPromptsFromNote(filename: string, content: string): string[] {
-  const headings = Array.from(content.matchAll(/^#{1,3}\s+(.+)$/gm))
-    .map((m) => m[1].trim())
-    .filter((h) => h.length > 3 && h.length < 55);
-  const baseName = filename
-    .replace(/\.(md|txt|json)$/i, "")
-    .replace(/[-_]/g, " ")
-    .trim();
-
-  const prompts: string[] = [];
-  for (const h of headings) {
-    if (!/ignore|exploit|study notes/i.test(h) && prompts.length < 2) {
-      prompts.push(`Learn: ${h}`);
-    }
-  }
-  if (prompts.length === 0) {
-    prompts.push(`Explain ${baseName || "this note"} step by step`);
-    prompts.push(`Key concepts in ${baseName || "my notes"}`);
-  }
-  return prompts.slice(0, 2);
-}
 
 type WorkspaceTab = "briefing" | "workspace" | "tutor";
-
-const MAN_PAGE_LINKS: Record<string, { label: string; url: string }[]> = {
-  n1: [
-    {
-      label: "Python shlex.split()",
-      url: "https://docs.python.org/3/library/shlex.html#shlex.split",
-    },
-    {
-      label: "POSIX Shell Tokenization",
-      url: "https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_03",
-    },
-  ],
-  n2: [
-    {
-      label: "man 2 fork",
-      url: "https://man7.org/linux/man-pages/man2/fork.2.html",
-    },
-    {
-      label: "Python os.fork()",
-      url: "https://docs.python.org/3/library/os.html#os.fork",
-    },
-  ],
-  n3: [
-    {
-      label: "man 3 exec (execvp)",
-      url: "https://man7.org/linux/man-pages/man3/exec.3.html",
-    },
-    {
-      label: "Python os.execvp()",
-      url: "https://docs.python.org/3/library/os.html#os.execvp",
-    },
-  ],
-  "n3-b1": [
-    {
-      label: "man 2 open",
-      url: "https://man7.org/linux/man-pages/man2/open.2.html",
-    },
-    {
-      label: "man 2 write",
-      url: "https://man7.org/linux/man-pages/man2/write.2.html",
-    },
-    {
-      label: "Python os.open() / FDs",
-      url: "https://docs.python.org/3/library/os.html#file-descriptor-operations",
-    },
-  ],
-  n4: [
-    {
-      label: "man 2 waitpid",
-      url: "https://man7.org/linux/man-pages/man2/waitpid.2.html",
-    },
-    {
-      label: "Python os.waitpid()",
-      url: "https://docs.python.org/3/library/os.html#os.waitpid",
-    },
-  ],
-  n5: [
-    {
-      label: "man 2 pipe",
-      url: "https://man7.org/linux/man-pages/man2/pipe.2.html",
-    },
-    {
-      label: "man 2 dup2",
-      url: "https://man7.org/linux/man-pages/man2/dup.2.html",
-    },
-  ],
-};
-
-const QUICK_SOLUTIONS: Record<
-  string,
-  { hypothesis: string; stuck_at: string; code_or_output: string }
-> = {
-  n1: {
-    hypothesis:
-      "I think shlex.split() tokenizes command strings while preserving quoted substrings, and catching EOFError lets the REPL loop exit cleanly on Ctrl+D.",
-    stuck_at: "Verified empty line handling and EOF exit.",
-    code_or_output: `import shlex
-
-while True:
-    try:
-        raw = input("tsh> ")
-    except EOFError:
-        print()
-        break
-    tokens = shlex.split(raw)
-    if not tokens:
-        continue
-    if tokens[0] == "exit":
-        break
-    print(tokens)`,
-  },
-  n2: {
-    hypothesis:
-      "I think os.fork() duplicates the current process memory space and returns 0 inside the newly created child process while returning the child's PID to the parent process.",
-    stuck_at: "Checked both execution paths with os.getpid().",
-    code_or_output: `import os
-
-pid = os.fork()
-if pid == 0:
-    print(f"[Child] Running in child process with PID={os.getpid()}")
-else:
-    print(f"[Parent] Parent PID={os.getpid()} spawned child PID={pid}")`,
-  },
-  n3: {
-    hypothesis:
-      "I think os.execvp() overwrites the current process memory image with the new program binary while inheriting the open file descriptor table (0, 1, 2), so any print() after execvp never executes unless exec fails.",
-    stuck_at: "Placed os.execvp inside the pid == 0 child branch so the shell survives.",
-    code_or_output: `import os
-
-args = ["ls", "-la"]
-pid = os.fork()
-if pid == 0:
-    os.execvp(args[0], args)
-    print("This line never executes because the process image was replaced!")`,
-  },
-  "n3-b1": {
-    hypothesis:
-      "I think a file descriptor is a non-negative integer index into the process's kernel FD table pointing to an open file description (where 0=stdin, 1=stdout, 2=stderr), which is preserved across os.execvp.",
-    stuck_at: "Tested os.open returning FD 3 and writing bytes via os.write.",
-    code_or_output: `import os
-
-# FDs 0 (stdin), 1 (stdout), 2 (stderr) are already open!
-fd = os.open("scratch_fd_test.txt", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-print(f"Kernel allocated integer file descriptor: {fd}") # Prints 3
-os.write(fd, b"Hello POSIX kernel FD table!\\n")
-os.close(fd)`,
-  },
-  n4: {
-    hypothesis:
-      "I think os.waitpid(pid, 0) blocks the parent shell until the child terminates, reaps its zombie process entry, and lets us decode the exit code via os.WEXITSTATUS(status).",
-    stuck_at: "Verified parent waits before printing next prompt.",
-    code_or_output: `import os
-
-pid = os.fork()
-if pid == 0:
-    os.execvp("ls", ["ls", "-la"])
-else:
-    _, status = os.waitpid(pid, 0)
-    exit_code = os.WEXITSTATUS(status)
-    print(f"Child exited cleanly with code {exit_code}")`,
-  },
-  n5: {
-    hypothesis:
-      "I think os.pipe() creates a kernel buffer pair (r, w) and os.dup2 rewires child 1 stdout (fd 1) to w and child 2 stdin (fd 0) to r, and closing unused ends in parent and children ensures wc receives EOF.",
-    stuck_at: "Closed both r and w in parent after forking so wc -l does not hang.",
-    code_or_output: `import os
-
-r, w = os.pipe()
-pid1 = os.fork()
-if pid1 == 0:
-    os.close(r)
-    os.dup2(w, 1)
-    os.close(w)
-    os.execvp("ls", ["ls"])
-
-pid2 = os.fork()
-if pid2 == 0:
-    os.close(w)
-    os.dup2(r, 0)
-    os.close(r)
-    os.execvp("wc", ["wc", "-l"])
-
-os.close(r)
-os.close(w)
-os.waitpid(pid1, 0)
-os.waitpid(pid2, 0)`,
-  },
-};
 
 export default function FeynmanDagPlatform() {
   const [appState, setAppState] = useState<AppState>(INITIAL_APP_STATE);
@@ -318,14 +127,15 @@ export default function FeynmanDagPlatform() {
       setHydrated(true);
     }
 
-    // Fetch real kept files from kept-notes/ directory on disk
+    // Fetch real kept files from kept-notes/ directory on disk (with AI-planned prompts)
     fetch("/api/curriculum")
       .then((res) => res.json())
       .then((data) => {
-        if (Array.isArray(data?.kept_files)) {
+        const list = data?.keptFiles ?? data?.kept_files;
+        if (Array.isArray(list)) {
           setKeptFiles((prev) => {
             const existingNames = new Set(prev.map((f) => f.filename));
-            const diskFiles = (data.kept_files as KeptFileItem[]).filter(
+            const diskFiles = (list as KeptFileItem[]).filter(
               (f) => !existingNames.has(f.filename)
             );
             return [...prev, ...diskFiles];
@@ -618,18 +428,23 @@ export default function FeynmanDagPlatform() {
             goal: branchSpec.goal,
             practice_task: branchSpec.practice_task,
             explain_prompt: `Explain ${branchSpec.title} in plain terms and how it connects back to ${parentNode.title} (${parentId}).`,
-            verification_criteria: [
-              "Calls os.open() and inspects the returned integer file descriptor",
-              "Writes bytes via os.write() or explains why FDs 0, 1, 2 are reserved for stdin/stdout/stderr",
-              "Explains that file descriptors are kernel table indices preserved across execvp",
-            ],
+            verification_criteria:
+              branchSpec.verification_criteria &&
+              branchSpec.verification_criteria.length > 0
+                ? branchSpec.verification_criteria
+                : [
+                    `Explains the core concept of ${branchSpec.title} clearly`,
+                    `Resolves the misconception: ${branchSpec.misconception_identified}`,
+                  ],
             parent_summary: `Spawned from ${parentId} (${parentNode.title}) to resolve prerequisite misconception: ${branchSpec.misconception_identified}`,
             known: [...parentNode.context.known],
             misconception: branchSpec.misconception_identified,
-            open_questions: [
-              "Why does os.open() return 3 when opening the first file in a normal process?",
-              "Why do open file descriptors remain open across os.execvp()?",
-            ],
+            open_questions:
+              branchSpec.open_questions && branchSpec.open_questions.length > 0
+                ? branchSpec.open_questions
+                : [
+                    `How does ${branchSpec.title} clarify ${parentNode.title}?`,
+                  ],
           },
           user_submission: {
             hypothesis: "",
@@ -639,9 +454,9 @@ export default function FeynmanDagPlatform() {
           merge_note_md: `---
 id: ${branchSpec.branch_id}
 parent: ${parentId}
-title: "${branchSpec.title}"
+title: "${branchSpec.title.replace(/"/g, '\\"')}"
 mastery: seen
-tags: [remediation-branch, posix-shell, file-descriptors]
+tags: [remediation-branch, ${branchSpec.branch_id}]
 ---
 
 # ${branchSpec.branch_id}: ${branchSpec.title}
@@ -928,24 +743,37 @@ ${branchSpec.misconception_identified}
         setImportedFileName(validatedMd.data.filename);
         setImportedNotesContext(validatedMd.data.rawContent);
 
-        // Also add to Kept Files so the Start screen generates prompts from this file!
-        const newKeptItem: KeptFileItem = {
-          id: `kept-${Date.now()}`,
-          filename: validatedMd.data.filename,
-          snippet: validatedMd.data.rawContent
-            .replace(/^---[\s\S]*?---/, "")
-            .replace(/[#*`]/g, "")
-            .trim()
-            .slice(0, 140),
-          suggestedPrompts: extractPromptsFromNote(
-            validatedMd.data.filename,
-            validatedMd.data.rawContent
-          ),
-        };
-        setKeptFiles((prev) => [
-          newKeptItem,
-          ...prev.filter((f) => f.filename !== newKeptItem.filename),
-        ]);
+        // Ask the AI Planner to analyze the uploaded file and plan custom learning prompts from it
+        fetch("/api/curriculum", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "analyze_file",
+            filename: validatedMd.data.filename,
+            content: validatedMd.data.rawContent,
+          }),
+        })
+          .then((r) => r.json())
+          .then((aiFile) => {
+            const newKeptItem: KeptFileItem = {
+              id: `kept-${Date.now()}`,
+              filename: validatedMd.data.filename,
+              snippet:
+                typeof aiFile?.snippet === "string"
+                  ? aiFile.snippet
+                  : validatedMd.data.rawContent.slice(0, 140),
+              suggestedPrompts: Array.isArray(aiFile?.suggestedPrompts)
+                ? aiFile.suggestedPrompts
+                : [`Learn ${validatedMd.data.filename}`],
+            };
+            setKeptFiles((prev) => [
+              newKeptItem,
+              ...prev.filter((f) => f.filename !== newKeptItem.filename),
+            ]);
+          })
+          .catch(() => {
+            // Ignore network error
+          });
 
         setStatusBanner({
           type: "info",
@@ -1077,56 +905,6 @@ topic: "${appState.topic_title || "Learning Path"}"
         }`,
       });
     }
-  };
-
-  const isPosixShellNode = useMemo(() => {
-    return (
-      activeNode.context.goal.includes("shlex.split") ||
-      activeNode.context.goal.includes("os.fork") ||
-      activeNode.context.goal.includes("os.execvp") ||
-      activeNode.context.goal.includes("os.waitpid") ||
-      activeNode.context.goal.includes("os.pipe") ||
-      activeNode.id === "n3-b1"
-    );
-  }, [activeNode]);
-
-  // Load verified sample solution into current node for fast demo testing (works on both POSIX Shell and custom topics!)
-  const handleFillVerifiedExample = () => {
-    const isGitTopic =
-      activeNode.title.toLowerCase().includes("git") ||
-      activeNode.title.toLowerCase().includes("commit") ||
-      activeNode.title.toLowerCase().includes("blob") ||
-      activeNode.title.toLowerCase().includes("staging");
-
-    const sample = isPosixShellNode
-      ? QUICK_SOLUTIONS[activeNode.id]
-      : isGitTopic
-      ? {
-          hypothesis: `I think ${activeNode.title} works by staging modified file contents into .git/index via git add (which hashes content into a SHA-1 blob in .git/objects) and then recording an immutable tree snapshot and parent commit pointer when running git commit -m.`,
-          stuck_at:
-            "Verified the difference between the working directory, .git/index staging area, and .git/objects commit snapshot.",
-          code_or_output: `# 1. Stage modified file into .git/index (creates SHA-1 blob object)\n$ git add README.md\n\n# 2. Create immutable commit snapshot pointing to root tree & parent SHA\n$ git commit -m "feat: explain ${activeNode.title} from first principles"\n[main 8f4a2c1] feat: explain ${activeNode.title} from first principles\n 1 file changed, 12 insertions(+)`,
-        }
-      : {
-          hypothesis: `I think ${activeNode.title} works from first principles by taking the initial input state, applying the core mechanism (${activeNode.context.goal}), and verifying the resulting state against edge cases (${activeNode.context.verification_criteria.join("; ")}).`,
-          stuck_at: `Checked boundary conditions and invariants for ${activeNode.title}.`,
-          code_or_output: `// Worked Example for ${activeNode.id}: ${activeNode.title}\n// 1. Initial State / Input:\nInput -> [${activeNode.title}]\n\n// 2. Step-by-Step Mechanism & Verification:\n- ${activeNode.context.verification_criteria.join("\n- ")}\n\n// 3. Verified Output:\nResult: State transition verified cleanly.`,
-        };
-
-    if (!sample) return;
-    setHypothesis(sample.hypothesis);
-    setStuckAt(sample.stuck_at);
-    setCodeOrOutput(sample.code_or_output);
-    syncInputsToActiveNode(
-      sample.hypothesis,
-      sample.stuck_at,
-      sample.code_or_output,
-      mergeNoteDraft
-    );
-    setStatusBanner({
-      type: "info",
-      text: `Pre-filled verified example & Feynman explanation for "${activeNode.title}". Click "Submit for AI Review" to evaluate and pass verification!`,
-    });
   };
 
   // Select or generate a new curriculum from the Onboarding Modal
@@ -1574,31 +1352,6 @@ topic: "${appState.topic_title || "Learning Path"}"
                       )
                     )}
                   </ul>
-
-                  {/* Helpful Reference Links (only for POSIX shell track) */}
-                  {isPosixShellNode && (
-                    <div className="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-slate-800/80">
-                      <span className="text-[11px] text-slate-400">
-                        Helpful Reference Links:
-                      </span>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {(MAN_PAGE_LINKS[activeNode.id] ?? MAN_PAGE_LINKS.n3).map(
-                          (link, idx) => (
-                            <a
-                              key={idx}
-                              href={link.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 rounded border border-cyan-500/30 bg-cyan-950/30 px-2.5 py-1 text-[11px] text-cyan-300 hover:bg-cyan-900/40 transition-colors"
-                            >
-                              {link.label}
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </section>
 
                 {/* CTA to proceed to Explanation Tab */}
@@ -1632,16 +1385,9 @@ topic: "${appState.topic_title || "Learning Path"}"
                         setStuckAt("I'm not sure how to start.");
                       }}
                       className="rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-[11px] text-slate-300 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors"
-                      title="Type 'idk' to get a friendly analogy first"
+                      title="Ask the AI Tutor for a simple analogy first"
                     >
                       I&apos;m Not Sure Yet (&quot;idk&quot;)
-                    </button>
-                    <button
-                      onClick={handleFillVerifiedExample}
-                      className="rounded-lg border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-1 text-[11px] text-emerald-300 hover:bg-emerald-900/50 transition-colors"
-                      title="Fill a sample response for this step"
-                    >
-                      Fill Example Response
                     </button>
                   </div>
                 </div>

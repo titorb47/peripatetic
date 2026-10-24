@@ -53,8 +53,9 @@ export function OnboardingModal({
   const [selectedFileContext, setSelectedFileContext] = useState("");
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
 
-  // Dynamic Prerequisites fetched for the chosen topic
+  // Dynamic Prerequisites & AI Planning Note fetched for the chosen topic
   const [dynamicPrereqs, setDynamicPrereqs] = useState<string[]>([]);
+  const [aiPlanNote, setAiPlanNote] = useState<string | null>(null);
   const [isLoadingPrereqs, setIsLoadingPrereqs] = useState(false);
   const [customPrereqInput, setCustomPrereqInput] = useState("");
 
@@ -83,6 +84,7 @@ export function OnboardingModal({
     setSelectedFileContext(fileCtx);
     setSelectedFileName(fileName);
     setKnownPrerequisites([...masteredNodeTitles]);
+    setAiPlanNote(null);
     setStep("survey");
     setIsLoadingPrereqs(true);
 
@@ -93,6 +95,7 @@ export function OnboardingModal({
         body: JSON.stringify({
           action: "prereqs",
           topic: clean,
+          fileContext: fileCtx,
         }),
       });
       const data = await res.json();
@@ -103,17 +106,11 @@ export function OnboardingModal({
         new Set([...masteredNodeTitles, ...fetched])
       );
       setDynamicPrereqs(combined);
+      if (typeof data.planNote === "string" && data.planNote.trim()) {
+        setAiPlanNote(data.planNote.trim());
+      }
     } catch {
-      setDynamicPrereqs(
-        Array.from(
-          new Set([
-            ...masteredNodeTitles,
-            `What "${clean}" is used for`,
-            `Basic terms of ${clean}`,
-            `A simple example of ${clean}`,
-          ])
-        )
-      );
+      setDynamicPrereqs([...masteredNodeTitles]);
     } finally {
       setIsLoadingPrereqs(false);
     }
@@ -386,11 +383,19 @@ export function OnboardingModal({
                   <span className="text-cyan-300">{customTopic}</span>
                 </label>
                 {isLoadingPrereqs && (
-                  <span className="text-[11px] text-cyan-400 animate-pulse">
-                    Finding prerequisites...
+                  <span className="text-[11px] text-cyan-400 animate-pulse flex items-center gap-1">
+                    <Sparkles className="w-3 h-3" />
+                    AI analyzing topic prerequisites...
                   </span>
                 )}
               </div>
+
+              {aiPlanNote && (
+                <p className="text-[11px] text-cyan-300/90 bg-cyan-950/30 border border-cyan-500/20 rounded-xl px-3 py-1.5">
+                  <Sparkles className="w-3 h-3 inline mr-1 text-cyan-400" />
+                  {aiPlanNote}
+                </p>
+              )}
 
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {dynamicPrereqs.map((item) => {

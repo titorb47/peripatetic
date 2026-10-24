@@ -5,3 +5,4 @@ A shell reads a command line, splits arguments, clones itself (`fork`), replaces
 
 ## File Descriptors & Pipes
 Every process has an open file table (`0` stdin, `1` stdout, `2` stderr). Pipes connect the output of one process to the input of another.
+
