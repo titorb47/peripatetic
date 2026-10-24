@@ -15,8 +15,9 @@ import {
   Star,
   Check,
   Plus,
+  Hammer,
 } from "lucide-react";
-import { KeptFileItem, PreSurveyData } from "@/types/schema";
+import { KeptFileItem, PreSurveyData, SuggestedProject } from "@/types/schema";
 
 interface OnboardingModalProps {
   isOpen: boolean;
@@ -53,7 +54,10 @@ export function OnboardingModal({
   const [selectedFileContext, setSelectedFileContext] = useState("");
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
 
-  // Dynamic Prerequisites & AI Planning Note fetched for the chosen topic
+  // Dynamic Projects, Prerequisites & AI Planning Note fetched for the chosen topic
+  const [suggestedProjects, setSuggestedProjects] = useState<SuggestedProject[]>([]);
+  const [selectedProject, setSelectedProject] = useState<SuggestedProject | null>(null);
+  const [customProjectInput, setCustomProjectInput] = useState("");
   const [dynamicPrereqs, setDynamicPrereqs] = useState<string[]>([]);
   const [aiPlanNote, setAiPlanNote] = useState<string | null>(null);
   const [isLoadingPrereqs, setIsLoadingPrereqs] = useState(false);
@@ -84,6 +88,8 @@ export function OnboardingModal({
     setSelectedFileContext(fileCtx);
     setSelectedFileName(fileName);
     setKnownPrerequisites([...masteredNodeTitles]);
+    setSuggestedProjects([]);
+    setSelectedProject(null);
     setAiPlanNote(null);
     setStep("survey");
     setIsLoadingPrereqs(true);
@@ -99,6 +105,10 @@ export function OnboardingModal({
         }),
       });
       const data = await res.json();
+      if (Array.isArray(data.suggestedProjects) && data.suggestedProjects.length > 0) {
+        setSuggestedProjects(data.suggestedProjects);
+        setSelectedProject(data.suggestedProjects[1] ?? data.suggestedProjects[0]);
+      }
       const fetched: string[] = Array.isArray(data.prerequisites)
         ? data.prerequisites
         : [];
@@ -134,12 +144,26 @@ export function OnboardingModal({
     setCustomPrereqInput("");
   };
 
+  const handleAddCustomProject = () => {
+    const val = customProjectInput.trim();
+    if (!val) return;
+    const customProj: SuggestedProject = {
+      title: val,
+      deliverable: `Complete and verify your custom project: "${val}"`,
+      difficulty: "Custom",
+    };
+    setSuggestedProjects((prev) => [customProj, ...prev]);
+    setSelectedProject(customProj);
+    setCustomProjectInput("");
+  };
+
   const handleFinalStart = async () => {
     const preSurvey: PreSurveyData = {
       experienceLevel,
       knownPrerequisites,
       preferredDepth,
       confidenceBefore,
+      selectedProject: selectedProject ?? undefined,
     };
     await onSelectCurriculum("", customTopic, preSurvey, selectedFileContext);
     setStep("topic");
@@ -307,9 +331,9 @@ export function OnboardingModal({
           </div>
         )}
 
-        {/* STEP 2: DYNAMIC PRE-SURVEY TAILORED TO CHOSEN TOPIC */}
+        {/* STEP 2: PROJECT PICKER + DYNAMIC PRE-SURVEY TAILORED TO CHOSEN TOPIC */}
         {step === "survey" && (
-          <div className="p-6 space-y-5">
+          <div className="p-6 space-y-5 max-h-[82vh] overflow-y-auto">
             {selectedFileName && (
               <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 px-3 py-2 text-xs text-cyan-200 flex items-center gap-2">
                 <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -319,11 +343,90 @@ export function OnboardingModal({
               </div>
             )}
 
-            {/* Question 1: Familiarity & Path Size */}
+            {/* Question 1: AI-Suggested Projects to Build / Get Done */}
+            <div className="space-y-2.5 rounded-2xl border border-cyan-500/30 bg-slate-950/80 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-bold text-slate-100 flex items-center gap-1.5">
+                  <Hammer className="w-3.5 h-3.5 text-cyan-400" />
+                  1. Pick a Project to Build &amp; Complete for{" "}
+                  <span className="text-cyan-300">{customTopic}</span>
+                </label>
+                {isLoadingPrereqs && (
+                  <span className="text-[11px] text-cyan-400 animate-pulse flex items-center gap-1">
+                    <Sparkles className="w-3 h-3" />
+                    AI designing projects...
+                  </span>
+                )}
+              </div>
+
+              <p className="text-[11px] text-slate-400">
+                Your learning map and branches will be structured as hands-on milestones to finish this project:
+              </p>
+
+              <div className="space-y-2">
+                {suggestedProjects.map((proj) => {
+                  const isSelected = selectedProject?.title === proj.title;
+                  return (
+                    <button
+                      key={proj.title}
+                      type="button"
+                      onClick={() => setSelectedProject(proj)}
+                      className={`w-full text-left rounded-xl border p-3 transition-all flex items-start justify-between gap-3 ${
+                        isSelected
+                          ? "border-cyan-500 bg-cyan-500/15 text-slate-100 shadow-sm"
+                          : "border-slate-800 bg-slate-900/80 text-slate-300 hover:border-slate-700"
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="text-xs font-bold flex items-center gap-2">
+                          {isSelected && (
+                            <Check className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          )}
+                          <span>{proj.title}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Deliverable: {proj.deliverable}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-md border border-slate-700 bg-slate-950 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">
+                        {proj.difficulty}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom project input */}
+              <div className="flex gap-2 pt-1">
+                <input
+                  type="text"
+                  value={customProjectInput}
+                  onChange={(e) => setCustomProjectInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddCustomProject();
+                    }
+                  }}
+                  placeholder="Or type your own project idea to build..."
+                  className="flex-1 rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddCustomProject}
+                  className="inline-flex items-center gap-1 rounded-xl border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Use Project
+                </button>
+              </div>
+            </div>
+
+            {/* Question 2: Familiarity & Starting Confidence */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-200">
-                  1. Your familiarity with this topic
+                  2. Your familiarity with this topic
                 </label>
                 <div className="grid grid-cols-3 gap-1.5">
                   {[

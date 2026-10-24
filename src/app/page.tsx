@@ -216,34 +216,37 @@ export default function FeynmanDagPlatform() {
       return { x: 180, y: idx * 175 };
     };
 
-    return appState.nodes.map((n, index) => {
-      // Deterministic Vertical Graph Layout Math:
-      // - Root nodes stack vertically down the center at x = 180, spaced by y = rootIndex * 175
-      // - Remediation branches sprout horizontally to the right at x = parent.x + 320 * branchIndex, y = parent.y
-      let position = n.position;
-      if (n.parent === null) {
-        position = getRootPosition(n.id, index);
-      } else {
-        const parentIdx = appState.nodes.findIndex((p) => p.id === n.parent);
-        const parentNode = appState.nodes[parentIdx];
-        if (parentNode) {
-          const parentPos =
-            parentNode.parent === null
-              ? getRootPosition(parentNode.id, parentIdx)
-              : parentNode.position;
-          const siblingBranches = appState.nodes.filter(
-            (b) => b.parent === n.parent
-          );
-          const branchIndex = Math.max(
-            1,
-            siblingBranches.findIndex((b) => b.id === n.id) + 1
-          );
-          position = {
-            x: parentPos.x + branchIndex * 320,
-            y: parentPos.y + (branchIndex - 1) * 160,
-          };
-        }
+    // Recursive position resolver so branches can branch off other branches (n1 -> n1-b1 -> n1-b1-b1)
+    const resolveNodePosition = (
+      node: CurriculumNode,
+      fallbackIdx: number,
+      visited = new Set<string>()
+    ): { x: number; y: number } => {
+      if (node.parent === null || visited.has(node.id)) {
+        return getRootPosition(node.id, fallbackIdx);
       }
+      visited.add(node.id);
+      const parentIdx = appState.nodes.findIndex((p) => p.id === node.parent);
+      const parentNode = appState.nodes[parentIdx];
+      if (!parentNode) {
+        return node.position;
+      }
+      const parentPos = resolveNodePosition(parentNode, parentIdx, visited);
+      const siblingBranches = appState.nodes.filter(
+        (b) => b.parent === node.parent
+      );
+      const branchIndex = Math.max(
+        1,
+        siblingBranches.findIndex((b) => b.id === node.id) + 1
+      );
+      return {
+        x: parentPos.x + 320,
+        y: parentPos.y + (branchIndex - 1) * 160,
+      };
+    };
+
+    return appState.nodes.map((n, index) => {
+      const position = resolveNodePosition(n, index);
 
       return {
         id: n.id,
@@ -284,7 +287,7 @@ export default function FeynmanDagPlatform() {
             type: MarkerType.ArrowClosed,
             color: "#f59e0b",
           },
-          label: "side-quest (depth=1)",
+          label: "helper branch",
           labelStyle: {
             fill: "#fcd34d",
             fontSize: 10,
@@ -376,33 +379,19 @@ export default function FeynmanDagPlatform() {
     });
   };
 
-  // Helper to spawn a remediation branch node horizontally to the right of its parent
+  // Helper to spawn a remediation branch node horizontally to the right of its parent (supports branching off a branch!)
   const spawnRemediationBranchNode = useCallback(
     (branchSpec: NonNullable<TutorResponse["spawn_branch"]>, parentId: string) => {
       setAppState((prev) => {
         const parentNode = prev.nodes.find((n) => n.id === parentId);
         if (!parentNode) return prev;
 
-        // Enforce Max Branch Depth = 1
-        if (parentNode.parent !== null) {
-          return prev;
-        }
-
-        const existingBranch = prev.nodes.find(
-          (n) => n.id === branchSpec.branch_id
-        );
-        if (existingBranch) {
-          return {
-            ...prev,
-            current_node_id: existingBranch.id,
-            nodes: prev.nodes.map((n) =>
-              n.id === parentId ? { ...n, status: "branched" } : n
-            ),
-          };
-        }
-
         const existingSiblings = prev.nodes.filter((n) => n.parent === parentId);
         const branchIndex = existingSiblings.length + 1;
+        const resolvedBranchId =
+          branchSpec.branch_id && !prev.nodes.some((n) => n.id === branchSpec.branch_id)
+            ? branchSpec.branch_id
+            : `${parentId}-b${branchIndex}`;
 
         const rootIds = prev.nodes
           .filter((n) => n.parent === null)
@@ -411,14 +400,14 @@ export default function FeynmanDagPlatform() {
         const parentY = rootIdx >= 0 ? rootIdx * 175 : parentNode.position.y;
         const parentX = rootIdx >= 0 ? 180 : parentNode.position.x;
 
-        // Deterministic horizontal branch layout: sprouts to the right of the vertical trunk
+        // Deterministic horizontal branch layout: sprouts to the right of its parent (root or branch)
         const branchPosition = {
-          x: parentX + branchIndex * 320,
+          x: parentX + 320,
           y: parentY + (branchIndex - 1) * 160,
         };
 
         const newBranchNode: CurriculumNode = {
-          id: branchSpec.branch_id,
+          id: resolvedBranchId,
           parent: parentId,
           title: branchSpec.title,
           status: "open",
@@ -452,14 +441,14 @@ export default function FeynmanDagPlatform() {
             code_or_output: "",
           },
           merge_note_md: `---
-id: ${branchSpec.branch_id}
+id: ${resolvedBranchId}
 parent: ${parentId}
 title: "${branchSpec.title.replace(/"/g, '\\"')}"
 mastery: seen
-tags: [remediation-branch, ${branchSpec.branch_id}]
+tags: [remediation-branch, ${resolvedBranchId}]
 ---
 
-# ${branchSpec.branch_id}: ${branchSpec.title}
+# ${resolvedBranchId}: ${branchSpec.title}
 
 ## Prerequisite Remediation Goal
 ${branchSpec.goal}
@@ -472,7 +461,7 @@ ${branchSpec.misconception_identified}
 `,
         };
 
-        const newEdgeId = `e-${parentId}-${branchSpec.branch_id}`;
+        const newEdgeId = `e-${parentId}-${resolvedBranchId}`;
         const updatedNodes = prev.nodes.map((n) =>
           n.id === parentId
             ? {
@@ -521,7 +510,17 @@ ${branchSpec.misconception_identified}
 
     syncInputsToActiveNode(hypothesis, stuckAt, codeOrOutput, mergeNoteDraft);
 
-    const currentBranchDepth = activeNode.parent === null ? 0 : 1;
+    // Compute true recursive branch depth (0 for root, 1 for branch, 2 for branch-of-branch, etc.)
+    let currentBranchDepth = 0;
+    let cursorParent = activeNode.parent;
+    const seenParents = new Set<string>();
+    while (cursorParent && !seenParents.has(cursorParent)) {
+      seenParents.add(cursorParent);
+      currentBranchDepth += 1;
+      const pNode = appState.nodes.find((n) => n.id === cursorParent);
+      cursorParent = pNode?.parent ?? null;
+    }
+
     const contextToUse =
       overrideContext !== undefined ? overrideContext : importedNotesContext;
 
@@ -576,12 +575,12 @@ ${branchSpec.misconception_identified}
         ),
       }));
 
-      // Automatically spawn the helper branch node onto the graph when needed (e.g., on "idk" or a prerequisite gap)
-      if (data.spawn_branch?.should_spawn && activeNode.parent === null) {
+      // Automatically spawn the helper branch node onto the graph when needed (supports branching off both root nodes AND existing branches!)
+      if (data.spawn_branch?.should_spawn) {
         spawnRemediationBranchNode(data.spawn_branch, activeNode.id);
         setStatusBanner({
           type: "warning",
-          text: `Branched out helper step "${data.spawn_branch.title}" (${data.spawn_branch.branch_id}) to help build your understanding!`,
+          text: `Branched out helper step "${data.spawn_branch.title}" from ${activeNode.id} to help build your understanding!`,
         });
       }
 
@@ -1226,8 +1225,28 @@ topic: "${appState.topic_title || "Learning Path"}"
 
         {/* RIGHT PANE (50% width): Tabbed Workspace */}
         <div className="flex w-1/2 h-full flex-col overflow-hidden bg-slate-950/80">
-          {/* Active Step Header & 3-Tab Bar */}
+          {/* Active Step Header, Target Project Banner & 3-Tab Bar */}
           <div className="border-b border-slate-800 bg-slate-900/75 px-5 pt-4 pb-0 shrink-0 space-y-3">
+            {/* Active Project Goal Banner */}
+            {appState.project_goal && (
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/25 px-3.5 py-2 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-bold text-cyan-300 truncate">
+                    Target Project: {appState.project_goal.title}
+                  </div>
+                  <div className="text-[10px] text-slate-300 truncate">
+                    Deliverable: {appState.project_goal.deliverable}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsOnboardingOpen(true)}
+                  className="shrink-0 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-semibold text-cyan-200 hover:bg-cyan-500/20 transition-colors"
+                >
+                  Change Project
+                </button>
+              </div>
+            )}
+
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2 flex-wrap">
                 <span

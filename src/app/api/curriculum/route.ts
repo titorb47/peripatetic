@@ -296,6 +296,11 @@ function buildMinimalOfflineFallback(
     nodes,
     edges: buildEdgesFromNodes(nodes),
     topic_title: cleanTopic,
+    project_goal: preSurvey?.selectedProject ?? {
+      title: `Hands-On Project: ${cleanTopic}`,
+      deliverable: `Build and verify a complete working walkthrough of ${cleanTopic}.`,
+      difficulty: "Hands-On",
+    },
     pre_survey: preSurvey,
   };
 }
@@ -347,41 +352,82 @@ Respond ONLY with JSON: { "snippet": "...", "suggestedPrompts": ["...", "...", "
       });
     }
 
-    // 2. AI Prerequisite Planner: Discover specific prerequisites & planning note for ANY topic
+    // 2. AI Project & Prerequisite Planner: Suggest concrete Projects + Prerequisites before creating the graph
     if (action === "prereqs") {
       const targetTopic = topicRaw || "General Topic";
 
       const aiRes = await callGeminiJson(
-        `You are an AI Curriculum Architect. Given a topic the user wants to learn (and optional file context), identify:
-1. "prerequisites": 4 or 5 specific, concrete foundational concepts (2-6 words each) that are prerequisite building blocks for "${targetTopic}". Make them genuinely specific to "${targetTopic}" (never generic placeholders).
-2. "planNote": a 1-sentence note explaining how you will adapt the learning graph based on which prerequisites they check off.
-3. "recommendedQuestion": 1 short diagnostic question to gauge their starting intuition.
+        `You are an AI Project-Based Curriculum Architect. Before creating a learning graph for "${targetTopic}", plan:
+1. "suggestedProjects": 3 concrete, practical projects or real-world deliverables the user can choose to build/complete while learning "${targetTopic}" (1 Starter project, 1 Hands-On project, 1 Challenge project). Each project needs:
+   - "title": short action-oriented project title (4-8 words)
+   - "deliverable": 1 clear sentence describing what the user will have built, written, or solved by the end of the graph
+   - "difficulty": "Starter" | "Hands-On" | "Challenge"
+2. "prerequisites": 4 or 5 specific foundational concepts (2-6 words each) that are prerequisite building blocks for "${targetTopic}".
+3. "planNote": 1 sentence explaining how the project milestones and branches will adapt to their selected project and known prerequisites.
+
 Respond ONLY with valid JSON:
 {
+  "suggestedProjects": [
+    { "title": "...", "deliverable": "...", "difficulty": "Starter" },
+    { "title": "...", "deliverable": "...", "difficulty": "Hands-On" },
+    { "title": "...", "deliverable": "...", "difficulty": "Challenge" }
+  ],
   "prerequisites": ["...", "...", "...", "..."],
-  "planNote": "...",
-  "recommendedQuestion": "..."
+  "planNote": "..."
 }`,
         `Topic to learn: "${targetTopic}"${
           fileContext ? `\nContext from user's note:\n${fileContext.slice(0, 1200)}` : ""
         }`,
-        0.25
+        0.3
       );
+
+      const fallbackProjects = [
+        {
+          title: `Starter Project: Guided Walkthrough of ${targetTopic}`,
+          deliverable: `Create a step-by-step annotated example showing how ${targetTopic} works from input to output.`,
+          difficulty: "Starter",
+        },
+        {
+          title: `Hands-On Project: Build & Test ${targetTopic} in Practice`,
+          deliverable: `Design, build, and verify a complete real-world workflow or implementation using ${targetTopic}.`,
+          difficulty: "Hands-On",
+        },
+        {
+          title: `Challenge Project: Troubleshoot & Optimize ${targetTopic}`,
+          deliverable: `Solve realistic edge cases, failure modes, and design trade-offs in a full ${targetTopic} project.`,
+          difficulty: "Challenge",
+        },
+      ];
 
       if (
         aiRes.parsed &&
         Array.isArray(aiRes.parsed.prerequisites) &&
         aiRes.parsed.prerequisites.length >= 2
       ) {
+        const suggestedProjects =
+          Array.isArray(aiRes.parsed.suggestedProjects) &&
+          aiRes.parsed.suggestedProjects.length >= 1
+            ? (aiRes.parsed.suggestedProjects as Record<string, unknown>[])
+                .slice(0, 3)
+                .map((p, i) => ({
+                  title: String(
+                    p.title || fallbackProjects[i]?.title || `Project ${i + 1}`
+                  ),
+                  deliverable: String(
+                    p.deliverable || fallbackProjects[i]?.deliverable || ""
+                  ),
+                  difficulty: String(
+                    p.difficulty || fallbackProjects[i]?.difficulty || "Hands-On"
+                  ),
+                }))
+            : fallbackProjects;
+
         return NextResponse.json({
+          suggestedProjects,
           prerequisites: aiRes.parsed.prerequisites.map(String).slice(0, 5),
           planNote:
             typeof aiRes.parsed.planNote === "string"
               ? aiRes.parsed.planNote
-              : null,
-          recommendedQuestion:
-            typeof aiRes.parsed.recommendedQuestion === "string"
-              ? aiRes.parsed.recommendedQuestion
               : null,
           source: "live_ai",
           model_used: aiRes.modelUsed,
@@ -389,14 +435,14 @@ Respond ONLY with valid JSON:
       }
 
       return NextResponse.json({
+        suggestedProjects: fallbackProjects,
         prerequisites: [
           `Core purpose of ${targetTopic}`,
           `Key building blocks of ${targetTopic}`,
           `Basic walkthrough of ${targetTopic}`,
           `Real-world use cases for ${targetTopic}`,
         ],
-        planNote: `I'll design a custom step-by-step path for "${targetTopic}" starting right after any concepts you check above.`,
-        recommendedQuestion: null,
+        planNote: `Pick a target project below and check any concepts you already know—your learning map will be structured as milestones to finish that project!`,
         source: "fallback",
       });
     }
@@ -457,15 +503,24 @@ Respond ONLY with valid JSON:
       });
     }
 
-    // 4. Full AI Curriculum & DAG Planner (`action === "generate"`)
+    // 4. Full AI Project-Driven Curriculum & DAG Planner (`action === "generate"`)
     const targetTopic = topicRaw || "How a Command Shell Works";
+    const selectedProject = preSurvey?.selectedProject;
+
+    const projectDirective = selectedProject
+      ? `TARGET PROJECT TO COMPLETE:
+- Project Title: "${selectedProject.title}"
+- Final Deliverable: "${selectedProject.deliverable}"
+- Project Level: ${selectedProject.difficulty}
+CRITICAL PROJECT-FIRST RULE: Every single node in the graph MUST be a concrete, hands-on Project Milestone that directly builds toward finishing "${selectedProject.title}". By the time the learner completes the final node, they will have completed the full deliverable ("${selectedProject.deliverable}")!`
+      : `CRITICAL PROJECT-FIRST RULE: Design a hands-on Target Project ("project_goal") for "${targetTopic}" and make every node in the graph a concrete Project Milestone toward completing that project!`;
 
     const depthInstruction =
       preSurvey?.preferredDepth === "short"
-        ? "Plan a concise 3-node path focusing on the most essential mechanisms."
+        ? "Plan a concise 3-node project milestone path focusing on getting the core project working."
         : preSurvey?.preferredDepth === "deep"
-        ? "Plan a thorough 6-to-8 node path that explores underlying mechanisms, edge cases, and synthesis."
-        : "Autonomously choose the ideal number of nodes (anywhere from 3 to 7 nodes) based on the true conceptual complexity of the topic.";
+        ? "Plan a thorough 6-to-8 node project milestone path covering architecture, implementation, edge-case testing, and final delivery."
+        : "Autonomously choose the ideal number of project milestones (between 3 and 7 nodes) needed to build and complete the project.";
 
     const learnerCalibration = preSurvey
       ? `Learner Profile:
@@ -478,35 +533,39 @@ Respond ONLY with valid JSON:
         }
 CRITICAL PLANNING RULE FOR KNOWN CONCEPTS: Do NOT create introductory nodes that merely repeat what the learner already knows (${
           preSurvey.knownPrerequisites.join(", ") || "none"
-        }). Instead, treat those concepts as already mastered prerequisites in Node 1's "known" array, and start Node 1 ("n1") right at the next unmastered concept! Adjust the depth and tasks to match a "${
-          preSurvey.experienceLevel
-        }" learner.`
+        }). Instead, treat those concepts as already mastered prerequisites in Node 1's "known" array, and start Milestone 1 ("n1") right at the next unmastered step of the project!`
       : "Learner Profile: Start from approachable first principles.";
 
-    const systemPrompt = `You are an Autonomous AI Curriculum & Knowledge-Graph Planner.
-Design a completely custom, first-principles learning path for the user's topic: "${targetTopic}".
+    const systemPrompt = `You are an Autonomous AI Project-Based Curriculum & Knowledge-Graph Planner.
+Design a project-driven learning path for "${targetTopic}" where the learner gets a real project done milestone by milestone.
 
 PLANNING RULES:
-1. ${depthInstruction}
-2. ${learnerCalibration}
-3. Domain-Natural Tasks: Match the subject naturally (e.g., if it's Git, use Git workflows/commands; if it's biology, chemistry, history, cooking, finance, or math, use real examples/formulas/scenarios from that field; if it's systems programming, use code/syscalls). Never force Python or POSIX unless the topic is about them.
-4. Approachable, Clear Language: Avoid intimidating academic jargon. Every goal and task should be clear and inviting.
-5. Sequential Root Nodes: Number root nodes "n1", "n2", ..., "nK" with "parent": null.
+1. ${projectDirective}
+2. ${depthInstruction}
+3. ${learnerCalibration}
+4. Domain-Natural Project Milestones: Match the subject naturally. Each node's "practice_task" should ask the learner to build/draft/solve the next piece of the project and explain how it works in their own words.
+5. Approachable, Action-Oriented Language: Keep titles and goals concrete, clear, and motivating.
+6. Sequential Root Milestones: Number root nodes "n1", "n2", ..., "nK" with "parent": null.
 
 For each node, plan:
 - "id": "n1", "n2", ...
-- "title": Specific 3-6 word title for this concept
-- "goal": 1-2 sentence clear learning goal
-- "practice_task": Concrete, engaging prompt asking the learner to explain a mechanism or walk through a short example in their own words
-- "explain_prompt": 1 sentence prompt for their Feynman explanation
-- "verification_criteria": Array of 2 specific criteria the AI tutor will check to verify mastery of this node
-- "parent_summary": How this node connects to the previous node (or why it's the starting frontier based on what they already know)
-- "known": Array of 1-3 prerequisite concepts assumed entering this node
-- "open_questions": Array of 2 thought-provoking Socratic questions for this node
+- "title": Specific 3-6 word Project Milestone title
+- "goal": 1-2 sentence goal explaining what part of the project you are completing in this step
+- "practice_task": Concrete hands-on task to build/write/solve this milestone of the project and explain how it works
+- "explain_prompt": 1 sentence prompt for their explanation
+- "verification_criteria": Array of 2 specific criteria checking both the project milestone output and conceptual understanding
+- "parent_summary": How this milestone builds on the previous milestone toward the final project deliverable
+- "known": Array of 1-3 prerequisite concepts assumed entering this milestone
+- "open_questions": Array of 2 thought-provoking questions about this milestone
 
 Respond ONLY with valid JSON:
 {
-  "topic_title": "Clean Display Title for the Topic",
+  "topic_title": "Clean Display Title",
+  "project_goal": {
+    "title": "Project Title",
+    "deliverable": "1-sentence description of the finished project deliverable",
+    "difficulty": "Starter | Hands-On | Challenge"
+  },
   "nodes": [
     {
       "id": "n1",
@@ -617,6 +676,23 @@ Respond ONLY with valid JSON:
         }
       );
 
+      const aiProjectGoal =
+        aiRes.parsed.project_goal &&
+        typeof aiRes.parsed.project_goal === "object"
+          ? (aiRes.parsed.project_goal as Record<string, unknown>)
+          : null;
+
+      const resolvedProjectGoal = selectedProject ?? {
+        title: String(
+          aiProjectGoal?.title || `Hands-On Project: ${plannedTitle}`
+        ),
+        deliverable: String(
+          aiProjectGoal?.deliverable ||
+            `Complete all milestones to build and verify ${plannedTitle}.`
+        ),
+        difficulty: String(aiProjectGoal?.difficulty || "Hands-On"),
+      };
+
       const newState: AppState = {
         current_node_id: "n1",
         failed_attempts: 0,
@@ -624,6 +700,7 @@ Respond ONLY with valid JSON:
         nodes: builtNodes,
         edges: buildEdgesFromNodes(builtNodes),
         topic_title: plannedTitle,
+        project_goal: resolvedProjectGoal,
         pre_survey: preSurvey,
       };
 

@@ -28,11 +28,18 @@ export interface CurriculumNode {
   merge_note_md: string; // Obsidian-compatible markdown with YAML frontmatter
 }
 
+export interface SuggestedProject {
+  title: string;
+  deliverable: string;
+  difficulty: string;
+}
+
 export interface PreSurveyData {
   experienceLevel: "beginner" | "intermediate" | "advanced";
   knownPrerequisites: string[];
   preferredDepth: "dynamic" | "short" | "deep";
   confidenceBefore: number; // 1 to 5
+  selectedProject?: SuggestedProject;
 }
 
 export interface PostSurveyData {
@@ -60,6 +67,7 @@ export interface AppState {
   nodes: CurriculumNode[];
   edges: { id: string; source: string; target: string; animated?: boolean }[];
   topic_title?: string;
+  project_goal?: SuggestedProject;
   pre_survey?: PreSurveyData;
   post_survey?: PostSurveyData;
 }
@@ -124,11 +132,18 @@ export const CurriculumNodeSchema = z.object({
   merge_note_md: z.string(),
 });
 
+export const SuggestedProjectSchema = z.object({
+  title: z.string(),
+  deliverable: z.string(),
+  difficulty: z.string(),
+});
+
 export const PreSurveyDataSchema = z.object({
   experienceLevel: z.enum(["beginner", "intermediate", "advanced"]),
   knownPrerequisites: z.array(z.string()),
   preferredDepth: z.enum(["dynamic", "short", "deep"]),
   confidenceBefore: z.number().min(1).max(5),
+  selectedProject: SuggestedProjectSchema.optional(),
 });
 
 export const PostSurveyDataSchema = z.object({
@@ -156,6 +171,7 @@ export const AppStateSchema = z.object({
     })
   ),
   topic_title: z.string().optional(),
+  project_goal: SuggestedProjectSchema.optional(),
   pre_survey: PreSurveyDataSchema.optional(),
   post_survey: PostSurveyDataSchema.optional(),
 });
@@ -194,7 +210,7 @@ export const TutorRequestSchema = z.object({
   node: CurriculumNodeSchema,
   user_submission: UserSubmissionSchema,
   imported_notes_context: z.string().optional().default(""),
-  current_branch_depth: z.number().int().min(0).max(1),
+  current_branch_depth: z.number().int().min(0).max(20),
   action: z.enum(["diagnose", "verify"]).optional().default("diagnose"),
 });
 
