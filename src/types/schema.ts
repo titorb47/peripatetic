@@ -28,12 +28,40 @@ export interface CurriculumNode {
   merge_note_md: string; // Obsidian-compatible markdown with YAML frontmatter
 }
 
+export interface PreSurveyData {
+  experienceLevel: "beginner" | "intermediate" | "advanced";
+  knownPrerequisites: string[];
+  preferredDepth: "dynamic" | "short" | "deep";
+  confidenceBefore: number; // 1 to 5
+}
+
+export interface PostSurveyData {
+  completedAt: string;
+  synthesisAnswer: string;
+  appliedScenarioAnswer: string;
+  confidenceBefore: number;
+  confidenceAfter: number;
+  canTeachFriend: "yes" | "mostly" | "not_yet";
+  passedCheck: boolean;
+  feedbackSummary: string;
+}
+
+export interface KeptFileItem {
+  id: string;
+  filename: string;
+  snippet: string;
+  suggestedPrompts: string[];
+}
+
 export interface AppState {
   current_node_id: string;
   failed_attempts: number;
   mastered_topics: string[];
   nodes: CurriculumNode[];
   edges: { id: string; source: string; target: string; animated?: boolean }[];
+  topic_title?: string;
+  pre_survey?: PreSurveyData;
+  post_survey?: PostSurveyData;
 }
 
 export interface TutorResponse {
@@ -94,6 +122,24 @@ export const CurriculumNodeSchema = z.object({
   merge_note_md: z.string(),
 });
 
+export const PreSurveyDataSchema = z.object({
+  experienceLevel: z.enum(["beginner", "intermediate", "advanced"]),
+  knownPrerequisites: z.array(z.string()),
+  preferredDepth: z.enum(["dynamic", "short", "deep"]),
+  confidenceBefore: z.number().min(1).max(5),
+});
+
+export const PostSurveyDataSchema = z.object({
+  completedAt: z.string(),
+  synthesisAnswer: z.string(),
+  appliedScenarioAnswer: z.string(),
+  confidenceBefore: z.number().min(1).max(5),
+  confidenceAfter: z.number().min(1).max(5),
+  canTeachFriend: z.enum(["yes", "mostly", "not_yet"]),
+  passedCheck: z.boolean(),
+  feedbackSummary: z.string(),
+});
+
 export const AppStateSchema = z.object({
   current_node_id: z.string(),
   failed_attempts: z.number(),
@@ -107,6 +153,9 @@ export const AppStateSchema = z.object({
       animated: z.boolean().optional(),
     })
   ),
+  topic_title: z.string().optional(),
+  pre_survey: PreSurveyDataSchema.optional(),
+  post_survey: PostSurveyDataSchema.optional(),
 });
 
 export const SpawnBranchSchema = z.object({

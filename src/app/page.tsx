@@ -38,6 +38,7 @@ import {
   Compass,
   Zap,
   BatteryWarning,
+  Award,
 } from "lucide-react";
 
 import {
@@ -45,6 +46,9 @@ import {
   AppStateSchema,
   CurriculumNode,
   ImportedMarkdownSchema,
+  KeptFileItem,
+  PostSurveyData,
+  PreSurveyData,
   TutorResponse,
 } from "@/types/schema";
 import {
@@ -54,8 +58,65 @@ import {
 import { CurriculumNodeCard } from "@/components/CurriculumNodeCard";
 import { SecurityModal } from "@/components/SecurityModal";
 import { OnboardingModal } from "@/components/OnboardingModal";
+import { PostSurveyModal } from "@/components/PostSurveyModal";
 
 const STORAGE_KEY = "shell_from_scratch_feynman_dag_v2";
+const KEPT_FILES_KEY = "shell_from_scratch_kept_files_v1";
+
+const DEFAULT_KEPT_FILES: KeptFileItem[] = [
+  {
+    id: "kept-git",
+    filename: "git-workflow-notes.md",
+    snippet:
+      "Notes on working directory, staging area (.git/index), commits, and resolving branch merges.",
+    suggestedPrompts: [
+      "How do I git commit?",
+      "How Git branches and merges work",
+    ],
+  },
+  {
+    id: "kept-os",
+    filename: "shell-and-processes.md",
+    snippet:
+      "Lecture notes on how a terminal shell reads commands, forks child processes, and connects pipes.",
+    suggestedPrompts: [
+      "How a Command Shell Works",
+      "What are File Descriptors & Pipes?",
+    ],
+  },
+  {
+    id: "kept-ai",
+    filename: "ml-study-guide.md",
+    snippet:
+      "Study guide covering neural networks, gradients, backpropagation, and transformer attention.",
+    suggestedPrompts: [
+      "How Neural Networks Learn",
+      "Transformer Attention in Plain English",
+    ],
+  },
+];
+
+function extractPromptsFromNote(filename: string, content: string): string[] {
+  const headings = Array.from(content.matchAll(/^#{1,3}\s+(.+)$/gm))
+    .map((m) => m[1].trim())
+    .filter((h) => h.length > 3 && h.length < 55);
+  const baseName = filename
+    .replace(/\.(md|txt|json)$/i, "")
+    .replace(/[-_]/g, " ")
+    .trim();
+
+  const prompts: string[] = [];
+  for (const h of headings) {
+    if (!/ignore|exploit|study notes/i.test(h) && prompts.length < 2) {
+      prompts.push(`Learn: ${h}`);
+    }
+  }
+  if (prompts.length === 0) {
+    prompts.push(`Explain ${baseName || "this note"} step by step`);
+    prompts.push(`Key concepts in ${baseName || "my notes"}`);
+  }
+  return prompts.slice(0, 2);
+}
 
 type WorkspaceTab = "briefing" | "workspace" | "tutor";
 
@@ -256,7 +317,9 @@ export default function FeynmanDagPlatform() {
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(true);
   const [isGeneratingCurriculum, setIsGeneratingCurriculum] = useState(false);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
+  const [isPostSurveyOpen, setIsPostSurveyOpen] = useState(false);
   const [mergeEditorView, setMergeEditorView] = useState<"split" | "edit" | "preview">("split");
+  const [keptFiles, setKeptFiles] = useState<KeptFileItem[]>(DEFAULT_KEPT_FILES);
 
   // AI Quota & Engine Status Indicator
   const [aiEngineStatus, setAiEngineStatus] = useState<{
@@ -348,8 +411,12 @@ export default function FeynmanDagPlatform() {
   );
 
   const flowNodes: Node[] = useMemo(() => {
+    const rootIds = appState.nodes
+      .filter((n) => n.parent === null)
+      .map((n) => n.id);
+
     const getRootPosition = (id: string, fallbackIndex: number) => {
-      const rootIdx = ["n1", "n2", "n3", "n4", "n5"].indexOf(id);
+      const rootIdx = rootIds.indexOf(id);
       const idx = rootIdx >= 0 ? rootIdx : fallbackIndex;
       return { x: 180, y: idx * 175 };
     };
@@ -542,7 +609,10 @@ export default function FeynmanDagPlatform() {
         const existingSiblings = prev.nodes.filter((n) => n.parent === parentId);
         const branchIndex = existingSiblings.length + 1;
 
-        const rootIdx = ["n1", "n2", "n3", "n4", "n5"].indexOf(parentNode.id);
+        const rootIds = prev.nodes
+          .filter((n) => n.parent === null)
+          .map((n) => n.id);
+        const rootIdx = rootIds.indexOf(parentNode.id);
         const parentY = rootIdx >= 0 ? rootIdx * 175 : parentNode.position.y;
         const parentX = rootIdx >= 0 ? 180 : parentNode.position.x;
 
@@ -720,30 +790,16 @@ ${branchSpec.misconception_identified}
     }
   };
 
-  // Handle Tab key in monospace code textarea
-  const handleCodeKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const target = e.currentTarget;
-      const start = target.selectionStart;
-      const end = target.selectionEnd;
-      const updated =
-        codeOrOutput.substring(0, start) + "    " + codeOrOutput.substring(end);
-      setCodeOrOutput(updated);
-      requestAnimationFrame(() => {
-        target.selectionStart = target.selectionEnd = start + 4;
-      });
-    }
-  };
-
   // Save Note & Unlock Next (Conclude active node)
   const handleSaveNoteAndUnlockNext = () => {
     const parentId = activeNode.parent;
     const committedNote =
       mergeNoteDraft.trim() || activeNode.merge_note_md;
 
-    // Determine next node focus if root node vs branch node
-    const rootOrder = ["n1", "n2", "n3", "n4", "n5"];
+    // Dynamically determine root node order (works for 3, 4, 5, 6, 7+ nodes)
+    const rootOrder = appState.nodes
+      .filter((n) => n.parent === null)
+      .map((n) => n.id);
     const currentRootIdx = rootOrder.indexOf(activeNode.id);
     const nextRootId =
       currentRootIdx >= 0 && currentRootIdx < rootOrder.length - 1
@@ -775,7 +831,7 @@ ${branchSpec.misconception_identified}
 
         // 2. If merging a branch node (e.g. n3-b1), unlock & return focus to parent (n3) with updated known context
         if (parentId && n.id === parentId) {
-          const addedKnown = `Mastered ${activeNode.id} (${activeNode.title}): File descriptors are integer indices in the per-process kernel table (0=stdin, 1=stdout, 2=stderr) preserved across execvp.`;
+          const addedKnown = `Completed helper branch ${activeNode.id} (${activeNode.title}).`;
           const updatedKnown = n.context.known.includes(addedKnown)
             ? n.context.known
             : [...n.context.known, addedKnown];
@@ -792,7 +848,7 @@ ${branchSpec.misconception_identified}
           };
         }
 
-        // 3. If merging a root node (e.g. n3), unlock the next sequential root node (e.g. n4)
+        // 3. If merging a root node, unlock the next sequential root node
         if (!parentId && nextRootId && n.id === nextRootId && n.status === "locked") {
           return {
             ...n,
@@ -831,18 +887,19 @@ ${branchSpec.misconception_identified}
     if (parentId) {
       setStatusBanner({
         type: "success",
-        text: `Saved ${activeNode.id}.md & merged side-quest! Returned focus to parent node ${parentId} with updated prerequisite context.`,
+        text: `Saved ${activeNode.id}.md! Returned to ${parentId} so you can finish that step.`,
       });
     } else if (nextRootId) {
       setStatusBanner({
         type: "success",
-        text: `Saved ${activeNode.id}.md & unlocked next curriculum node ${nextRootId}!`,
+        text: `Saved ${activeNode.id}.md and unlocked next step (${nextRootId})!`,
       });
     } else {
       setStatusBanner({
         type: "success",
-        text: `Congratulations! You have saved ${activeNode.id}.md and completed the POSIX Tiny Shell DAG! Ready to export your Obsidian Vault (.zip).`,
+        text: `All steps complete! Opening the Final Learning Check so you can review what you learned.`,
       });
+      setIsPostSurveyOpen(true);
     }
   };
 
@@ -885,12 +942,32 @@ ${branchSpec.misconception_identified}
 
         setImportedFileName(validatedMd.data.filename);
         setImportedNotesContext(validatedMd.data.rawContent);
+
+        // Also add to Kept Files so the Start screen generates prompts from this file!
+        const newKeptItem: KeptFileItem = {
+          id: `kept-${Date.now()}`,
+          filename: validatedMd.data.filename,
+          snippet: validatedMd.data.rawContent
+            .replace(/^---[\s\S]*?---/, "")
+            .replace(/[#*`]/g, "")
+            .trim()
+            .slice(0, 140),
+          suggestedPrompts: extractPromptsFromNote(
+            validatedMd.data.filename,
+            validatedMd.data.rawContent
+          ),
+        };
+        setKeptFiles((prev) => [
+          newKeptItem,
+          ...prev.filter((f) => f.filename !== newKeptItem.filename),
+        ]);
+
         setStatusBanner({
-          type: "warning",
-          text: `Imported untrusted note "${validatedMd.data.filename}" — wrapped in <untrusted_learner_data> XML sandbox and running security & Feynman analysis...`,
+          type: "info",
+          text: `Added "${validatedMd.data.filename}" to your Kept Files and analyzing it safely...`,
         });
 
-        // Automatically trigger tutor diagnosis and switch to Terminal & Tutor tab
+        // Automatically trigger tutor diagnosis and switch to Feedback & Notes tab
         await handleAskTutor("diagnose", validatedMd.data.rawContent);
       } else {
         setStatusBanner({
@@ -965,6 +1042,30 @@ ${appState.nodes
   .join("\n")}
 `;
       vaultFolder.file("00-Index-MOC.md", mocContent);
+
+      // 2.5 Add Pre/Post Learning Survey Report if present
+      if (appState.pre_survey || appState.post_survey) {
+        const surveyMd = `---
+title: "Learning Check & Survey Summary"
+topic: "${appState.topic_title || "Learning Path"}"
+---
+
+# Learning Check & Survey Report
+
+## Pre-Learning Check
+- **Starting Level:** ${appState.pre_survey?.experienceLevel ?? "beginner"}
+- **Starting Confidence:** ${appState.pre_survey?.confidenceBefore ?? 2} / 5
+- **Known Prerequisites:** ${appState.pre_survey?.knownPrerequisites?.join(", ") || "None"}
+
+## Final Learning Check
+- **Confidence After:** ${appState.post_survey?.confidenceAfter ?? "Not taken yet"} / 5
+- **Ready to Teach a Friend:** ${appState.post_survey?.canTeachFriend ?? "N/A"}
+- **Big-Picture Synthesis:** ${appState.post_survey?.synthesisAnswer ?? "N/A"}
+- **Real-World Check:** ${appState.post_survey?.appliedScenarioAnswer ?? "N/A"}
+- **Feedback:** ${appState.post_survey?.feedbackSummary ?? "N/A"}
+`;
+        vaultFolder.file("01-Learning-Survey-Report.md", surveyMd);
+      }
 
       // 3. Add full graph-state.json for lossless re-import
       vaultFolder.file("graph-state.json", JSON.stringify(appState, null, 2));
@@ -1046,7 +1147,9 @@ ${appState.nodes
   // Select or generate a new curriculum from the Onboarding Modal
   const handleSelectCurriculum = async (
     presetKey: string,
-    customTopic?: string
+    customTopic?: string,
+    preSurvey?: PreSurveyData,
+    fileContext?: string
   ) => {
     setIsGeneratingCurriculum(true);
     try {
@@ -1056,22 +1159,31 @@ ${appState.nodes
         body: JSON.stringify({
           presetKey,
           topic: customTopic ?? "",
+          preSurvey,
+          fileContext,
         }),
       });
       const data = await res.json();
       if (data.state) {
         setAppState(data.state);
-        const firstNode = data.state.nodes[0];
-        setHypothesis(firstNode?.user_submission?.hypothesis ?? "");
-        setStuckAt(firstNode?.user_submission?.stuck_at ?? "");
-        setCodeOrOutput(firstNode?.user_submission?.code_or_output ?? "");
-        setMergeNoteDraft(firstNode?.merge_note_md ?? "");
+        const activeTarget =
+          data.state.nodes.find(
+            (n: CurriculumNode) => n.id === data.state.current_node_id
+          ) ?? data.state.nodes[0];
+        setHypothesis(activeTarget?.user_submission?.hypothesis ?? "");
+        setStuckAt(activeTarget?.user_submission?.stuck_at ?? "");
+        setCodeOrOutput(activeTarget?.user_submission?.code_or_output ?? "");
+        setMergeNoteDraft(activeTarget?.merge_note_md ?? "");
         setTutorResponse(null);
         setActiveTab("briefing");
         setIsOnboardingOpen(false);
       }
       if (data.ai_meta) {
         setAiEngineStatus(data.ai_meta);
+        const stepCount = data.state?.nodes?.length ?? 0;
+        const skippedCount =
+          data.state?.nodes?.filter((n: CurriculumNode) => n.status === "merged")
+            .length ?? 0;
         if (data.ai_meta.warning_message) {
           setStatusBanner({
             type: "warning",
@@ -1080,9 +1192,15 @@ ${appState.nodes
         } else {
           setStatusBanner({
             type: "success",
-            text: `Loaded 5-node Feynman DAG curriculum (${
+            text: `Built ${stepCount}-step learning path for "${
               customTopic || presetKey
-            }) via ${data.ai_meta.model_used}!`,
+            }"${
+              skippedCount > 0
+                ? ` (pre-completed ${skippedCount} intro step${
+                    skippedCount > 1 ? "s" : ""
+                  } based on your pre-check!)`
+                : ""
+            }.`,
           });
         }
       }
@@ -1118,36 +1236,30 @@ ${appState.nodes
 
       {/* TOP NAVIGATION BAR */}
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/90 bg-slate-950/95 px-4 py-2.5 shrink-0">
-        {/* Left: Brand Title & Persistent POSIX Environment Badge */}
+        {/* Left: Brand Title & Progress */}
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-400">
-              <Terminal className="h-4 w-4" />
+              <Compass className="h-4 w-4" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-sm font-bold tracking-tight text-slate-100">
-                  ShellFromScratch
+                <span className="text-sm font-bold tracking-tight text-slate-100">
+                  LearnFromScratch
                 </span>
-                <span className="text-xs font-mono text-cyan-400 font-semibold">
-                  // Feynman DAG
+                <span className="text-xs text-cyan-400 font-medium">
+                  &bull; {appState.topic_title || "Step-by-Step Learning Map"}
                 </span>
               </div>
               <p className="text-[10px] text-slate-400 hidden sm:block">
-                Build a POSIX Tiny Shell in Python &bull; Dynamic Remediation &amp; Obsidian Export
+                Learn any topic in your own words &bull; Export notes to Obsidian
               </p>
             </div>
           </div>
 
-          {/* Required Persistent UI Badge */}
-          <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/40 px-2.5 py-1 text-[11px] font-mono text-emerald-300">
-            <Cpu className="h-3 w-3 text-emerald-400" />
-            <span>Target Environment: POSIX (Linux, macOS, or WSL)</span>
-          </div>
-
-          {/* Mastery Progress Counter */}
-          <div className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/90 px-2.5 py-1 text-xs font-mono">
-            <span className="text-slate-400">Merged:</span>
+          {/* Progress Counter */}
+          <div className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/90 px-2.5 py-1 text-xs">
+            <span className="text-slate-400">Steps Done:</span>
             <span className="font-bold text-cyan-300">
               {mergedCount} / {totalNodes}
             </span>
@@ -1161,9 +1273,9 @@ ${appState.nodes
             </div>
           </div>
 
-          {/* Live AI Engine & Quota Status Pill (Shows when AI ran out of credits / quota) */}
+          {/* Live AI Engine & Quota Status Pill */}
           <div
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-mono ${
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${
               aiEngineStatus.source === "live_ai"
                 ? "border-cyan-500/40 bg-cyan-950/40 text-cyan-300"
                 : aiEngineStatus.source === "quota_exhausted"
@@ -1178,58 +1290,67 @@ ${appState.nodes
             {aiEngineStatus.source === "live_ai" ? (
               <>
                 <Zap className="h-3 w-3 text-cyan-400 fill-current" />
-                <span>AI: Live ({aiEngineStatus.model_used})</span>
+                <span>AI Tutor: Ready</span>
               </>
             ) : aiEngineStatus.source === "quota_exhausted" ? (
               <>
                 <BatteryWarning className="h-3.5 w-3.5 text-rose-400" />
-                <span>AI Quota Exhausted (429) &bull; Backup Engine Active</span>
+                <span>AI Quota Full &bull; Backup Active</span>
               </>
             ) : (
               <>
                 <AlertTriangle className="h-3 w-3 text-amber-400" />
-                <span>AI: Offline Backup Engine</span>
+                <span>Backup Tutor Active</span>
               </>
             )}
           </div>
         </div>
 
-        {/* Right: Action Buttons */}
+        {/* Right: Clean, Approachable Action Buttons */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => setIsOnboardingOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-cyan-500/15 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/25 transition-colors shadow-sm"
-            title="Choose what you want to learn, generate a custom topic DAG, or launch demo actions"
+            title="Pick what to learn, view prompts from your kept files, or adjust your starting level"
           >
             <Compass className="h-3.5 w-3.5 text-cyan-400" />
-            What to Learn
+            Topics &amp; Kept Files
           </button>
 
           <button
             onClick={handleLoadLiveDemoSeed}
             className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/25 transition-colors shadow-sm"
-            title="Pre-populate n1 & n2 as merged, open n3 with the stuck learner hypothesis"
+            title="Load the pre-populated demo state"
           >
             <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-            Load Live Demo Seed
+            Live Demo
+          </button>
+
+          <button
+            onClick={() => setIsPostSurveyOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/25 transition-colors"
+            title="Take the Final Learning Check & Reflection Survey"
+          >
+            <Award className="h-3.5 w-3.5 text-emerald-400" />
+            Final Check
           </button>
 
           <button
             onClick={() => fileInputRef.current?.click()}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors"
-            title="Import a .json state file or untrusted .md note (passes through Zod + XML sandboxing)"
+            title="Add a .md note to your Kept Files or restore a .json state"
           >
             <Upload className="h-3.5 w-3.5 text-cyan-400" />
-            Import Note / JSON
+            Add File
           </button>
 
           <button
             onClick={handleDownloadObsidianVault}
             className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-cyan-500/15 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/25 transition-colors"
-            title="Bundle all nodes' merge_note_md files + graph-state.json into an Obsidian ZIP vault"
+            title="Download all notes and your learning survey as a .zip folder"
           >
             <Download className="h-3.5 w-3.5 text-cyan-400" />
-            Download Vault (.zip)
+            Export Notes (.zip)
           </button>
 
           <button
@@ -1237,13 +1358,13 @@ ${appState.nodes
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 hover:border-rose-500/50 hover:text-rose-300 transition-colors"
           >
             <ShieldAlert className="h-3.5 w-3.5 text-rose-400" />
-            Security &amp; Limitations
+            Safety Info
           </button>
 
           <button
             onClick={handleResetCurriculum}
             className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/60 p-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors"
-            title="Reset curriculum graph to initial state"
+            title="Reset map to start"
           >
             <RotateCcw className="h-3.5 w-3.5" />
           </button>
@@ -1253,7 +1374,7 @@ ${appState.nodes
       {/* Optional Status Notification Bar */}
       {statusBanner && (
         <div
-          className={`flex items-center justify-between px-4 py-1.5 text-xs font-mono border-b shrink-0 ${
+          className={`flex items-center justify-between px-4 py-1.5 text-xs border-b shrink-0 ${
             statusBanner.type === "success"
               ? "bg-emerald-950/60 border-emerald-500/40 text-emerald-200"
               : statusBanner.type === "warning"
@@ -1273,29 +1394,26 @@ ${appState.nodes
         </div>
       )}
 
-      {/* MAIN DUAL-PANE WORKSPACE (50% Left Vertical DAG Canvas / 50% Right Tabbed Workspace) */}
+      {/* MAIN DUAL-PANE WORKSPACE (50% Left Learning Map / 50% Right Tabbed Workspace) */}
       <div className="flex flex-1 overflow-hidden">
-        {/* LEFT PANE (50% width): Vertical Top-Down React Flow DAG Canvas */}
+        {/* LEFT PANE (50% width): Learning Map Canvas */}
         <div className="relative w-1/2 h-full border-r border-slate-800 bg-slate-950">
-          {/* Top-left floating DAG legend & orientation indicator */}
+          {/* Top-left simple legend */}
           <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-2 pointer-events-none">
-            <div className="rounded-xl border border-slate-800/90 bg-slate-900/90 backdrop-blur-md px-3 py-2 text-[11px] font-mono text-slate-300 shadow-lg space-y-1">
+            <div className="rounded-xl border border-slate-800/90 bg-slate-900/90 backdrop-blur-md px-3 py-2 text-[11px] text-slate-300 shadow-lg space-y-1">
               <div className="flex items-center gap-2 font-semibold text-slate-100">
                 <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Vertical DAG Trunk &bull; Right Side-Quests</span>
-                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-cyan-300">
-                  max_branch_depth = 1
-                </span>
+                <span>Learning Map ({totalNodes} Steps)</span>
               </div>
               <div className="flex items-center gap-3 text-[10px] text-slate-400">
                 <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-full bg-cyan-400" /> Top-Down Trunk
+                  <span className="h-2 w-2 rounded-full bg-cyan-400" /> Current Step
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-full bg-amber-400" /> Right Branch
+                  <span className="h-2 w-2 rounded-full bg-amber-400" /> Helper Branch
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-full bg-emerald-400" /> Merged
+                  <span className="h-2 w-2 rounded-full bg-emerald-400" /> Done
                 </span>
               </div>
             </div>
@@ -1305,11 +1423,11 @@ ${appState.nodes
           <div className="absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-2">
             <button
               onClick={handleSimulateMaliciousMdImport}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-slate-900/95 px-2.5 py-1.5 text-[11px] font-mono text-rose-300 hover:bg-rose-950/60 transition-colors shadow-lg"
-              title="Test XML Sandboxing with an adversarial prompt-injection .md note"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-slate-900/95 px-2.5 py-1.5 text-[11px] text-rose-300 hover:bg-rose-950/60 transition-colors shadow-lg"
+              title="Test how the app safely blocks a malicious prompt-injection note"
             >
               <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
-              Test Malicious .md Injection
+              Test Safety Guard
             </button>
           </div>
 
@@ -1334,9 +1452,9 @@ ${appState.nodes
           </ReactFlow>
         </div>
 
-        {/* RIGHT PANE (50% width): Tabbed Workspace Architecture */}
+        {/* RIGHT PANE (50% width): Tabbed Workspace */}
         <div className="flex w-1/2 h-full flex-col overflow-hidden bg-slate-950/80">
-          {/* Active Node Compact Header & 3-Tab Navigation Bar */}
+          {/* Active Step Header & 3-Tab Bar */}
           <div className="border-b border-slate-800 bg-slate-900/75 px-5 pt-4 pb-0 shrink-0 space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2 flex-wrap">
@@ -1358,23 +1476,20 @@ ${appState.nodes
                   {activeNode.title}
                 </h1>
                 {activeNode.parent && (
-                  <span className="rounded-full bg-amber-950/90 border border-amber-500/40 px-2 py-0.5 text-[10px] font-mono text-amber-300">
-                    Side-Quest of {activeNode.parent} (Depth 1/1)
+                  <span className="rounded-full bg-amber-950/90 border border-amber-500/40 px-2 py-0.5 text-[10px] text-amber-300">
+                    Helper Step for {activeNode.parent}
                   </span>
                 )}
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
-                <span className="rounded-md border border-slate-700 bg-slate-800 px-2 py-0.5 font-mono text-[11px] text-slate-300">
-                  status: <strong className="text-cyan-300">{activeNode.status}</strong>
-                </span>
-                <span className="rounded-md border border-slate-700 bg-slate-800 px-2 py-0.5 font-mono text-[11px] text-slate-300">
-                  mastery: <strong className="text-emerald-300">{activeNode.mastery}</strong>
+                <span className="rounded-md border border-slate-700 bg-slate-800 px-2 py-0.5 text-[11px] text-slate-300">
+                  Status: <strong className="text-cyan-300">{activeNode.status}</strong>
                 </span>
               </div>
             </div>
 
-            {/* 3-Tab Bar: 1. Briefing | 2. Workspace | 3. Terminal & Tutor */}
+            {/* 3-Tab Bar: 1. Goal & Task | 2. Your Explanation | 3. Feedback & Notes */}
             <div className="flex items-center gap-1 border-t border-slate-800/80 pt-2">
               <button
                 onClick={() => setActiveTab("briefing")}
@@ -1385,7 +1500,7 @@ ${appState.nodes
                 }`}
               >
                 <BookOpen className="w-3.5 h-3.5" />
-                <span>1. Briefing</span>
+                <span>1. Goal &amp; Task</span>
               </button>
 
               <button
@@ -1397,7 +1512,7 @@ ${appState.nodes
                 }`}
               >
                 <FileCode2 className="w-3.5 h-3.5" />
-                <span>2. Workspace</span>
+                <span>2. Your Explanation</span>
               </button>
 
               <button
@@ -1408,8 +1523,8 @@ ${appState.nodes
                     : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/50"
                 }`}
               >
-                <Terminal className="w-3.5 h-3.5" />
-                <span>3. Terminal &amp; Tutor</span>
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>3. Feedback &amp; Notes</span>
                 {tutorResponse && (
                   <span
                     className={`ml-1 h-2 w-2 rounded-full ${
@@ -1427,13 +1542,13 @@ ${appState.nodes
 
           {/* Active Tab Content Area */}
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            {/* TAB 1: BRIEFING (Contains only the goal, practice task, and verification criteria) */}
+            {/* TAB 1: GOAL & TASK */}
             {activeTab === "briefing" && (
               <div className="space-y-4 animate-in fade-in duration-150">
                 {/* Concept Goal */}
                 <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 space-y-2 shadow-sm">
-                  <div className="font-mono text-[11px] uppercase tracking-wider text-cyan-400 font-semibold">
-                    Concept Goal
+                  <div className="text-xs font-bold text-cyan-400">
+                    What You&apos;ll Learn in This Step
                   </div>
                   <p className="text-sm text-slate-100 leading-relaxed">
                     {activeNode.context.goal}
@@ -1442,18 +1557,18 @@ ${appState.nodes
 
                 {/* Practice Task */}
                 <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 space-y-2 shadow-sm">
-                  <div className="font-mono text-[11px] uppercase tracking-wider text-amber-400 font-semibold">
-                    Practice Task
+                  <div className="text-xs font-bold text-amber-400">
+                    Your Prompt
                   </div>
                   <p className="text-sm text-slate-100 leading-relaxed">
                     {activeNode.context.practice_task}
                   </p>
                 </section>
 
-                {/* Verification Criteria */}
+                {/* Checklist */}
                 <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 space-y-3 shadow-sm">
-                  <div className="font-mono text-[11px] uppercase tracking-wider text-emerald-400 font-semibold">
-                    Verification Criteria
+                  <div className="text-xs font-bold text-emerald-400">
+                    What to Include
                   </div>
                   <ul className="space-y-2">
                     {activeNode.context.verification_criteria.map(
@@ -1475,11 +1590,11 @@ ${appState.nodes
                     )}
                   </ul>
 
-                  {/* Authoritative Reference Pills */}
+                  {/* Helpful Reference Links (only for POSIX shell track) */}
                   {isPosixShellNode && (
                     <div className="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-slate-800/80">
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-slate-400">
-                        POSIX Man-Page Citations:
+                      <span className="text-[11px] text-slate-400">
+                        Helpful Reference Links:
                       </span>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         {(MAN_PAGE_LINKS[activeNode.id] ?? MAN_PAGE_LINKS.n3).map(
@@ -1489,7 +1604,7 @@ ${appState.nodes
                               href={link.url}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center gap-1 rounded border border-cyan-500/30 bg-cyan-950/30 px-2.5 py-1 font-mono text-[11px] text-cyan-300 hover:bg-cyan-900/40 transition-colors"
+                              className="inline-flex items-center gap-1 rounded border border-cyan-500/30 bg-cyan-950/30 px-2.5 py-1 text-[11px] text-cyan-300 hover:bg-cyan-900/40 transition-colors"
                             >
                               {link.label}
                               <ExternalLink className="w-3 h-3" />
@@ -1501,29 +1616,27 @@ ${appState.nodes
                   )}
                 </section>
 
-                {/* CTA to proceed to Workspace Tab */}
+                {/* CTA to proceed to Explanation Tab */}
                 <div className="flex justify-end pt-1">
                   <button
                     onClick={() => setActiveTab("workspace")}
                     className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-cyan-400 transition-colors shadow-lg shadow-cyan-950/50"
                   >
-                    <span>Open Workspace</span>
+                    <span>Write Your Explanation</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
               </div>
             )}
 
-            {/* TAB 2: WORKSPACE (Houses the Feynman hypothesis, stuck-input, and code/worked-example textareas) */}
+            {/* TAB 2: YOUR EXPLANATION (Clean, approachable inputs + simple plain-text scratchpad) */}
             {activeTab === "workspace" && (
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 space-y-4 shadow-sm animate-in fade-in duration-150">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <FileCode2 className="w-4 h-4 text-cyan-400" />
+                    <Edit3 className="w-4 h-4 text-cyan-400" />
                     <h2 className="text-sm font-bold text-slate-100">
-                      {isPosixShellNode
-                        ? "Feynman Hypothesis & POSIX Code Workspace"
-                        : "Feynman Hypothesis & Worked Example Workspace"}
+                      Explain It in Your Own Words
                     </h2>
                   </div>
 
@@ -1531,32 +1644,30 @@ ${appState.nodes
                     <button
                       onClick={() => {
                         setHypothesis("idk");
-                        setStuckAt("I don't know where to start with this concept.");
+                        setStuckAt("I'm not sure how to start.");
                       }}
-                      className="rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-[11px] font-mono text-slate-300 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors"
-                      title="Test the Cold-Start Feynman Fallback ('idk' -> 3-sentence analogy + micro-question)"
+                      className="rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-[11px] text-slate-300 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors"
+                      title="Type 'idk' to get a friendly analogy first"
                     >
-                      Test &quot;idk&quot; Cold-Start
+                      I&apos;m Not Sure Yet (&quot;idk&quot;)
                     </button>
                     <button
                       onClick={handleFillVerifiedExample}
-                      className="rounded-lg border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-1 text-[11px] font-mono text-emerald-300 hover:bg-emerald-900/50 transition-colors"
-                      title="Fill a working explanation & example for this node"
+                      className="rounded-lg border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-1 text-[11px] text-emerald-300 hover:bg-emerald-900/50 transition-colors"
+                      title="Fill a sample response for this step"
                     >
-                      Fill Verified Sample
+                      Fill Example Response
                     </button>
                   </div>
                 </div>
 
-                {/* Imported Note Sandbox Indicator (if active) */}
+                {/* Imported Note Indicator (if active) */}
                 {importedFileName && (
                   <div className="flex items-center justify-between rounded-xl border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
-                    <div className="flex items-center gap-2 font-mono">
+                    <div className="flex items-center gap-2">
                       <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
                       <span>
-                        Active XML Sandboxed Note:{" "}
-                        <strong>{importedFileName}</strong> wrapped in{" "}
-                        <code>&lt;untrusted_learner_data&gt;</code>
+                        Attached Note: <strong>{importedFileName}</strong> (Safely isolated)
                       </span>
                     </div>
                     <button
@@ -1566,87 +1677,62 @@ ${appState.nodes
                       }}
                       className="text-[11px] underline hover:text-white ml-2"
                     >
-                      Clear Note
+                      Remove
                     </button>
                   </div>
                 )}
 
-                {/* Input 1: Hypothesis */}
+                {/* Input 1: Plain Explanation */}
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-slate-200">
-                    1. Feynman Hypothesis:{" "}
-                    <span className="font-mono text-cyan-400">
-                      &quot;I think [{activeNode.title}] works like...&quot;
-                    </span>
+                    1. How would you explain{" "}
+                    <span className="text-cyan-400">{activeNode.title}</span> to a friend?
                   </label>
                   <textarea
                     rows={3}
                     value={hypothesis}
                     onChange={(e) => setHypothesis(e.target.value)}
-                    placeholder='Explain your mental model in plain language (or type "idk" to trigger the 3-sentence Cold-Start Analogy)...'
+                    placeholder='Write your understanding in simple, everyday words (or click "I&apos;m Not Sure Yet" above for a helpful analogy)...'
                     className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
                   />
                 </div>
 
-                {/* Input 2: Stuck At */}
+                {/* Input 2: What feels unclear */}
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-slate-200">
-                    2. Friction Point:{" "}
-                    <span className="font-mono text-amber-400">
-                      &quot;...but I&apos;m stuck at&quot;
+                    2. What part feels unclear or tricky?{" "}
+                    <span className="text-[11px] font-normal text-slate-400">
+                      (Optional)
                     </span>
                   </label>
                   <input
                     type="text"
                     value={stuckAt}
                     onChange={(e) => setStuckAt(e.target.value)}
-                    placeholder="What behavior, step, or edge case is confusing right now?"
+                    placeholder="Any detail or question you'd like the tutor to clarify?"
                     className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
                   />
                 </div>
 
-                {/* Input 3: Distraction-Free Monospace Code / Worked Example Textarea */}
+                {/* Input 3: Simple, Plain-Text Scratchpad (No special key interception or command hooks) */}
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-xs font-semibold text-slate-200">
-                      {isPosixShellNode
-                        ? "3. Local POSIX Python Code & Terminal Output "
-                        : "3. Worked Example, Commands, Formula, or Code (Any Language / Optional) "}
-                      <span className="font-mono text-[10px] text-slate-400">
-                        (Tab key supported &bull; spellCheck/autoComplete disabled)
-                      </span>
-                    </label>
-                    <button
-                      onClick={() =>
-                        setCodeOrOutput(
-                          `import os, shutil\n# Testing destructive command scanner:\nos.system("rm -rf /tmp/something")\nshutil.rmtree("/tmp/test")`
-                        )
-                      }
-                      className="text-[10px] font-mono text-rose-400 hover:underline"
-                      title="Paste a risky command to test the Destructive Command Scanner banner"
-                    >
-                      Test `rm -rf` Scanner
-                    </button>
-                  </div>
+                  <label className="block text-xs font-semibold text-slate-200">
+                    3. Plain Text Scratchpad / Example{" "}
+                    <span className="text-[11px] font-normal text-slate-400">
+                      (Optional — jot down a quick example or extra notes)
+                    </span>
+                  </label>
                   <textarea
-                    rows={8}
+                    rows={5}
+                    maxLength={2000}
                     value={codeOrOutput}
                     onChange={(e) => setCodeOrOutput(e.target.value)}
-                    onKeyDown={handleCodeKeyDown}
-                    spellCheck={false}
-                    autoComplete="off"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                    placeholder={
-                      isPosixShellNode
-                        ? `# Paste your Python script or POSIX terminal output for ${activeNode.id}...\nimport os\n`
-                        : `Paste a concrete example, CLI command, math derivation, pseudocode, or snippet in any language for "${activeNode.title}"...`
-                    }
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-emerald-300 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+                    placeholder="Jot down a short example, steps, or notes here..."
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs leading-relaxed text-slate-200 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
                   />
                 </div>
 
-                {/* Primary Outcome-Driven Action Button: "Submit for AI Review" */}
+                {/* Submit Button */}
                 <div className="pt-2">
                   <button
                     onClick={() => handleAskTutor("diagnose")}
@@ -1655,25 +1741,25 @@ ${appState.nodes
                   >
                     <Play className="w-4 h-4 fill-current" />
                     {isLoadingTutor
-                      ? "Submitting to Feynman AI Tutor..."
-                      : "Submit for AI Review"}
+                      ? "Checking Your Explanation..."
+                      : "Check My Understanding"}
                   </button>
                 </div>
               </section>
             )}
 
-            {/* TAB 3: TERMINAL & TUTOR (Displays AI diagnosis, branch spawning alerts, and final Obsidian merge note editor) */}
+            {/* TAB 3: FEEDBACK & NOTES */}
             {activeTab === "tutor" && (
               <div className="space-y-5 animate-in fade-in duration-150">
                 {tutorResponse ? (
                   <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 space-y-3.5 shadow-lg">
-                    {/* AI Quota / Credits Exhausted Alert Banner */}
+                    {/* AI Quota Alert Banner */}
                     {tutorResponse.ai_meta?.source === "quota_exhausted" && (
-                      <div className="flex items-start gap-3 rounded-xl border-2 border-amber-500/80 bg-amber-950/60 p-3.5 text-xs text-amber-100 shadow-md">
+                      <div className="flex items-start gap-3 rounded-xl border border-amber-500/70 bg-amber-950/60 p-3.5 text-xs text-amber-100">
                         <BatteryWarning className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                         <div className="space-y-1">
-                          <div className="font-bold uppercase tracking-wider text-amber-300 font-mono">
-                            AI API Quota / Credits Exhausted (HTTP 429) &rarr; Seamless Backup Active
+                          <div className="font-bold text-amber-300">
+                            AI Quota Reached &rarr; Using Built-In Backup Tutor
                           </div>
                           <p className="leading-relaxed">
                             {tutorResponse.ai_meta.warning_message}
@@ -1682,13 +1768,13 @@ ${appState.nodes
                       </div>
                     )}
 
-                    {/* Destructive Command Safety Warning Banner */}
+                    {/* Safety Warning Banner */}
                     {tutorResponse.safety_warning && (
                       <div className="flex items-start gap-3 rounded-xl border border-rose-500/60 bg-rose-950/50 p-3.5 text-xs text-rose-200">
                         <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
                         <div className="space-y-1">
-                          <div className="font-bold uppercase tracking-wider text-rose-300 font-mono">
-                            Safety &amp; Sandbox Guardrail Alert
+                          <div className="font-bold text-rose-300">
+                            Safety Guard Notice
                           </div>
                           <p className="leading-relaxed">
                             {tutorResponse.safety_warning}
@@ -1697,13 +1783,13 @@ ${appState.nodes
                       </div>
                     )}
 
-                    {/* Security Refusal Alert Banner (if prompt injection detected) */}
+                    {/* Security Refusal Alert Banner */}
                     {isSecurityRefusal && (
                       <div className="flex items-start gap-3 rounded-xl border-2 border-rose-500 bg-rose-950/70 p-4 text-xs text-rose-100 shadow-lg">
                         <ShieldAlert className="w-6 h-6 text-rose-400 shrink-0 mt-0.5" />
                         <div className="space-y-1">
-                          <div className="font-mono text-xs font-bold uppercase tracking-wider text-rose-300">
-                            Prompt Injection Misuse Refusal (&lt;untrusted_learner_data&gt;)
+                          <div className="font-bold text-rose-300">
+                            Prompt-Injection Attempt Blocked
                           </div>
                           <p className="leading-relaxed">
                             {tutorResponse.diagnosis}
@@ -1712,46 +1798,43 @@ ${appState.nodes
                       </div>
                     )}
 
-                    {/* Header with Hint Level & Verification Status */}
+                    {/* Header */}
                     <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-800 pb-2.5">
                       <div className="flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-cyan-400" />
                         <h3 className="text-sm font-bold text-slate-100">
-                          Feynman Tutor Diagnosis
+                          Tutor Feedback
                         </h3>
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <span className="rounded-md border border-slate-700 bg-slate-800 px-2 py-0.5 font-mono text-[11px] text-amber-300">
-                          Hint Level: {tutorResponse.hint_level} / 3
-                        </span>
                         <span
-                          className={`rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold ${
+                          className={`rounded-md border px-2.5 py-0.5 text-[11px] font-semibold ${
                             tutorResponse.passed_verification
                               ? "border-emerald-500/50 bg-emerald-950/60 text-emerald-300"
                               : "border-slate-700 bg-slate-800 text-slate-300"
                           }`}
                         >
                           {tutorResponse.passed_verification
-                            ? "✓ Verification Passed"
-                            : "Review In Progress"}
+                            ? "✓ Ready to Save & Continue"
+                            : "Keep Going"}
                         </span>
                       </div>
                     </div>
 
-                    {/* Diagnosis Text */}
+                    {/* Feedback Text */}
                     {!isSecurityRefusal && (
                       <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3.5 text-xs leading-relaxed text-slate-200">
                         {tutorResponse.diagnosis}
                       </div>
                     )}
 
-                    {/* Socratic Question & Next Micro-Task */}
+                    {/* Follow-Up Question & Next Step */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                       <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 p-3 space-y-1">
-                        <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-cyan-300 font-semibold">
+                        <div className="flex items-center gap-1.5 text-[11px] text-cyan-300 font-bold">
                           <HelpCircle className="w-3.5 h-3.5" />
-                          Socratic Question
+                          Question to Think About
                         </div>
                         <p className="text-slate-100 font-medium leading-relaxed">
                           {tutorResponse.socratic_question}
@@ -1759,9 +1842,9 @@ ${appState.nodes
                       </div>
 
                       <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3 space-y-1">
-                        <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-emerald-300 font-semibold">
+                        <div className="flex items-center gap-1.5 text-[11px] text-emerald-300 font-bold">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          Next Actionable Step
+                          Suggested Next Step
                         </div>
                         <p className="text-slate-200 leading-relaxed">
                           {tutorResponse.next_task}
@@ -1769,25 +1852,20 @@ ${appState.nodes
                       </div>
                     </div>
 
-                    {/* Dynamic Remediation Branch Spawn CTA (sprouts horizontally to the right) */}
+                    {/* Dynamic Helper Branch Spawn CTA */}
                     {tutorResponse.spawn_branch?.should_spawn && (
                       <div className="rounded-xl border-2 border-amber-500/70 bg-amber-950/30 p-4 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="space-y-1">
-                            <div className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-amber-300">
-                              <GitBranch className="w-4 h-4" />
-                              Prerequisite Gap Detected &rarr; Side-Quest Branch Available
-                            </div>
-                            <p className="text-xs text-slate-200">
-                              <strong>
-                                {tutorResponse.spawn_branch.branch_id}:
-                              </strong>{" "}
-                              {tutorResponse.spawn_branch.title} —{" "}
-                              <span className="text-slate-300">
-                                {tutorResponse.spawn_branch.goal}
-                              </span>
-                            </p>
+                        <div className="space-y-1">
+                          <div className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-300">
+                            <GitBranch className="w-4 h-4" />
+                            Helpful Side-Step Available
                           </div>
+                          <p className="text-xs text-slate-200">
+                            <strong>{tutorResponse.spawn_branch.title}:</strong>{" "}
+                            <span className="text-slate-300">
+                              {tutorResponse.spawn_branch.goal}
+                            </span>
+                          </p>
                         </div>
 
                         <button
@@ -1801,49 +1879,45 @@ ${appState.nodes
                               setActiveTab("briefing");
                               setStatusBanner({
                                 type: "warning",
-                                text: `Spawned remediation branch ${tutorResponse.spawn_branch.branch_id} ("${tutorResponse.spawn_branch.title}") to the right of ${activeNode.id}!`,
+                                text: `Added helper step "${tutorResponse.spawn_branch.title}" to the right of ${activeNode.id}!`,
                               });
                             }
                           }}
                           className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-colors shadow-lg shadow-amber-950/50"
                         >
                           <GitBranch className="w-4 h-4" />
-                          Spawn Remediation Branch (
-                          {tutorResponse.spawn_branch.branch_id}:{" "}
-                          {tutorResponse.spawn_branch.title})
+                          Open Helper Step: {tutorResponse.spawn_branch.title}
                         </button>
                       </div>
                     )}
                   </section>
                 ) : (
                   <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5 text-center space-y-2">
-                    <Terminal className="w-6 h-6 text-cyan-400 mx-auto" />
+                    <Sparkles className="w-6 h-6 text-cyan-400 mx-auto" />
                     <div className="text-xs font-semibold text-slate-200">
-                      No AI Review Submitted Yet for {activeNode.id}
+                      No Feedback Yet for {activeNode.id}
                     </div>
                     <p className="text-xs text-slate-400 max-w-md mx-auto">
-                      Enter your Feynman hypothesis and code in the{" "}
-                      <strong>2. Workspace</strong> tab and click{" "}
-                      <strong>&quot;Submit for AI Review&quot;</strong>, or edit
-                      and save your Obsidian merge note directly below.
+                      Write your explanation in{" "}
+                      <strong>2. Your Explanation</strong> and click{" "}
+                      <strong>&quot;Check My Understanding&quot;</strong>, or
+                      save your note below to move to the next step.
                     </p>
                   </div>
                 )}
 
-                {/* Final Obsidian Merge Note Editor */}
+                {/* Summary Note Editor */}
                 <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden shadow-sm">
                   <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/60 px-4 py-3">
                     <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
                       <GitMerge className="w-4 h-4 text-emerald-400" />
-                      <span>
-                        Obsidian Merge Note Editor ({activeNode.id}.md)
-                      </span>
+                      <span>Your Summary Note ({activeNode.id}.md)</span>
                     </div>
 
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => setMergeEditorView("split")}
-                        className={`rounded px-2 py-1 text-[11px] font-mono ${
+                        className={`rounded px-2 py-1 text-[11px] ${
                           mergeEditorView === "split"
                             ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
                             : "text-slate-400 hover:text-slate-200"
@@ -1853,17 +1927,17 @@ ${appState.nodes
                       </button>
                       <button
                         onClick={() => setMergeEditorView("edit")}
-                        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-mono ${
+                        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] ${
                           mergeEditorView === "edit"
                             ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
                             : "text-slate-400 hover:text-slate-200"
                         }`}
                       >
-                        <Edit3 className="w-3 h-3" /> Raw MD
+                        <Edit3 className="w-3 h-3" /> Edit
                       </button>
                       <button
                         onClick={() => setMergeEditorView("preview")}
-                        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-mono ${
+                        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] ${
                           mergeEditorView === "preview"
                             ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
                             : "text-slate-400 hover:text-slate-200"
@@ -1882,15 +1956,15 @@ ${appState.nodes
                           : "grid-cols-1"
                       }`}
                     >
-                      {/* Raw Markdown Editor */}
+                      {/* Markdown Editor */}
                       {(mergeEditorView === "split" ||
                         mergeEditorView === "edit") && (
                         <div className="space-y-1">
-                          <div className="font-mono text-[10px] uppercase tracking-wider text-slate-400">
-                            YAML Frontmatter &amp; Markdown Source
+                          <div className="text-[11px] text-slate-400">
+                            Markdown Note
                           </div>
                           <textarea
-                            rows={11}
+                            rows={10}
                             value={mergeNoteDraft}
                             onChange={(e) => {
                               setMergeNoteDraft(e.target.value);
@@ -1901,20 +1975,19 @@ ${appState.nodes
                                 e.target.value
                               );
                             }}
-                            spellCheck={false}
                             className="w-full rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-200 focus:border-cyan-500 focus:outline-none"
                           />
                         </div>
                       )}
 
-                      {/* Live Markdown Preview (react-markdown) */}
+                      {/* Live Preview */}
                       {(mergeEditorView === "split" ||
                         mergeEditorView === "preview") && (
                         <div className="space-y-1">
-                          <div className="font-mono text-[10px] uppercase tracking-wider text-slate-400">
-                            Obsidian Live Preview (`react-markdown`)
+                          <div className="text-[11px] text-slate-400">
+                            Formatted Preview
                           </div>
-                          <div className="h-[250px] overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 p-3.5 text-xs leading-relaxed text-slate-200 space-y-2 prose prose-invert max-w-none">
+                          <div className="h-[230px] overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/90 p-3.5 text-xs leading-relaxed text-slate-200 space-y-2 prose prose-invert max-w-none">
                             <ReactMarkdown
                               components={{
                                 h1: ({ children }) => (
@@ -1951,12 +2024,12 @@ ${appState.nodes
                       )}
                     </div>
 
-                    {/* Conclude Node Button: "Save Note & Unlock Next" */}
+                    {/* Save & Continue Button */}
                     <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-800">
                       <p className="text-[11px] text-slate-400">
                         {activeNode.parent
-                          ? `Saving ${activeNode.id}.md merges this side-quest and returns focus to parent node ${activeNode.parent}.`
-                          : `Saving ${activeNode.id}.md commits your note into the vault and unlocks the next node in the vertical trunk.`}
+                          ? `Saves ${activeNode.id}.md and returns to ${activeNode.parent}.`
+                          : `Saves ${activeNode.id}.md and unlocks the next step.`}
                       </p>
 
                       <button
@@ -1964,7 +2037,7 @@ ${appState.nodes
                         className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 transition-colors shrink-0 shadow-lg shadow-emerald-950/50"
                       >
                         <GitMerge className="w-4 h-4" />
-                        Save Note &amp; Unlock Next
+                        Save &amp; Continue
                       </button>
                     </div>
                   </div>
@@ -1975,7 +2048,7 @@ ${appState.nodes
         </div>
       </div>
 
-      {/* Onboarding / "What do you want to learn?" Screen */}
+      {/* Start Screen: Pre-Check Survey, Kept Files Prompts, and Topic Picker */}
       <OnboardingModal
         isOpen={isOnboardingOpen}
         onClose={() => setIsOnboardingOpen(false)}
@@ -1985,9 +2058,28 @@ ${appState.nodes
         onTestMaliciousInjection={handleSimulateMaliciousMdImport}
         onOpenSecurityModal={() => setIsSecurityModalOpen(true)}
         isGeneratingCurriculum={isGeneratingCurriculum}
+        keptFiles={keptFiles}
       />
 
-      {/* Security & Limitations Modal */}
+      {/* End-of-Path Learning Check & Reflection Survey */}
+      <PostSurveyModal
+        isOpen={isPostSurveyOpen}
+        onClose={() => setIsPostSurveyOpen(false)}
+        topicTitle={appState.topic_title || "Your Learning Path"}
+        nodes={appState.nodes}
+        confidenceBefore={appState.pre_survey?.confidenceBefore ?? 2}
+        existingSurvey={appState.post_survey}
+        onSubmitSurvey={(surveyData: PostSurveyData) => {
+          setAppState((prev) => ({
+            ...prev,
+            post_survey: surveyData,
+          }));
+        }}
+        onDownloadVault={handleDownloadObsidianVault}
+        onOpenNewTopic={() => setIsOnboardingOpen(true)}
+      />
+
+      {/* Safety & Rubric Modal */}
       <SecurityModal
         isOpen={isSecurityModalOpen}
         onClose={() => setIsSecurityModalOpen(false)}

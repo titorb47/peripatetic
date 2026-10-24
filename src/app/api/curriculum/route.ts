@@ -1,6 +1,102 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AppState, AppStateSchema, CurriculumNode } from "@/types/schema";
-import { INITIAL_APP_STATE, INITIAL_EDGES } from "@/data/seedNodes";
+import {
+  AppState,
+  AppStateSchema,
+  CurriculumNode,
+  PreSurveyData,
+} from "@/types/schema";
+import { INITIAL_APP_STATE } from "@/data/seedNodes";
+
+function buildSequentialEdges(nodes: CurriculumNode[]) {
+  const rootNodes = nodes.filter((n) => n.parent === null);
+  const edges: { id: string; source: string; target: string; animated?: boolean }[] = [];
+  for (let i = 0; i < rootNodes.length - 1; i++) {
+    const src = rootNodes[i];
+    const tgt = rootNodes[i + 1];
+    edges.push({
+      id: `e-${src.id}-${tgt.id}`,
+      source: src.id,
+      target: tgt.id,
+      animated: src.status === "open" || (src.status === "merged" && tgt.status === "open"),
+    });
+  }
+  return edges;
+}
+
+function applyPreSurveyCalibration(
+  state: AppState,
+  preSurvey?: PreSurveyData,
+  topicTitle?: string
+): AppState {
+  const rootNodes = state.nodes.filter((n) => n.parent === null);
+  if (!preSurvey || rootNodes.length === 0) {
+    return {
+      ...state,
+      topic_title: topicTitle || state.topic_title || "Learning Path",
+      edges: buildSequentialEdges(state.nodes),
+    };
+  }
+
+  // Determine how many introductory nodes to pre-complete based on prerequisite survey
+  let skipCount = 0;
+  if (preSurvey.experienceLevel === "intermediate" && rootNodes.length >= 3) {
+    skipCount = 1;
+  } else if (preSurvey.experienceLevel === "advanced" && rootNodes.length >= 4) {
+    skipCount = 2;
+  } else if (preSurvey.knownPrerequisites.length >= 2 && rootNodes.length >= 3) {
+    skipCount = 1;
+  }
+
+  const masteredIds: string[] = [];
+  const calibratedNodes: CurriculumNode[] = state.nodes.map((node, idx) => {
+    if (idx < skipCount) {
+      masteredIds.push(node.id);
+      return {
+        ...node,
+        status: "merged",
+        mastery: "independent",
+        context: {
+          ...node.context,
+          known: [
+            ...node.context.known,
+            ...preSurvey.knownPrerequisites,
+            `Pre-verified via Prerequisite Check (${preSurvey.experienceLevel})`,
+          ],
+        },
+      };
+    }
+    if (idx === skipCount) {
+      return {
+        ...node,
+        status: "open",
+        context: {
+          ...node.context,
+          known: [
+            ...node.context.known,
+            ...preSurvey.knownPrerequisites,
+          ],
+        },
+      };
+    }
+    return {
+      ...node,
+      status: "locked",
+    };
+  });
+
+  const activeNode =
+    calibratedNodes.find((n) => n.status === "open") ?? calibratedNodes[0];
+
+  return {
+    ...state,
+    current_node_id: activeNode.id,
+    mastered_topics: masteredIds,
+    nodes: calibratedNodes,
+    edges: buildSequentialEdges(calibratedNodes),
+    topic_title: topicTitle || state.topic_title || "Learning Path",
+    pre_survey: preSurvey,
+  };
+}
 
 const CURATED_TOPICS: Record<string, CurriculumNode[]> = {
   "tcp-http": [
@@ -259,104 +355,199 @@ const CURATED_TOPICS: Record<string, CurriculumNode[]> = {
   ],
 };
 
-function buildCustomTopicFallback(topic: string): AppState {
+function getDesiredNodeCount(topic: string, preSurvey?: PreSurveyData): number {
+  if (preSurvey?.preferredDepth === "short") return 3;
+  if (preSurvey?.preferredDepth === "deep") return 7;
+
+  // Dynamic node count based on task complexity
+  const words = topic.trim().split(/\s+/).length;
+  const lower = topic.toLowerCase();
+  if (
+    lower.startsWith("how do i ") ||
+    lower.startsWith("what is ") ||
+    words <= 3
+  ) {
+    return 4;
+  }
+  if (
+    lower.includes("architecture") ||
+    lower.includes("engine") ||
+    lower.includes("compiler") ||
+    lower.includes("distributed") ||
+    lower.includes("from scratch") ||
+    words >= 7
+  ) {
+    return 6;
+  }
+  return 4;
+}
+
+function buildCustomTopicFallback(
+  topic: string,
+  preSurvey?: PreSurveyData
+): AppState {
   const cleanTopic = topic.trim() || "POSIX Tiny Shell in Python";
   const lower = cleanTopic.toLowerCase();
+  const desiredCount = getDesiredNodeCount(cleanTopic, preSurvey);
 
-  // If the user asks about git commit / git workflow, use the rich Git curriculum
+  // If the user asks about git commit / git workflow, use the rich Git curriculum dynamically sized
   if (lower.includes("git")) {
-    return {
-      current_node_id: "n1",
-      failed_attempts: 0,
-      mastered_topics: [],
-      nodes: [
-        {
-          id: "n1",
-          parent: null,
-          title: `Working Tree vs. Staging Index (${cleanTopic})`,
-          status: "open",
-          mastery: "seen",
-          position: { x: 180, y: 0 * 175 },
-          context: {
-            goal: "Understand the three areas of Git (Working Directory, Staging Index `.git/index`, and `.git/objects` Repository) and why `git add` stages content before `git commit`.",
-            practice_task:
-              'Write the shell commands (or Python subprocess calls) to stage a modified file with `git add` and create a snapshot with `git commit -m "message"`, and explain what `.git/index` holds.',
-            explain_prompt:
-              "Explain why `git commit` does nothing if you modify a file without running `git add` first.",
-            verification_criteria: [
-              "Explains the Staging Index (git add) vs Repository Commit (git commit)",
-              "Includes a concrete git add / git commit command or Python snippet",
-            ],
-            parent_summary: `Entry point for mastering "${cleanTopic}" from first principles.`,
-            known: ["Files and directories"],
-            misconception: null,
-            open_questions: [
-              "Why does Git have a separate Staging Area instead of committing modified files directly?",
-            ],
-          },
-          user_submission: { hypothesis: "", stuck_at: "", code_or_output: "" },
-          merge_note_md: `---\nid: n1\nparent: null\ntitle: "Working Tree vs. Staging Index"\nmastery: seen\n---\n# n1: Working Tree vs. Staging Index\n`,
+    const gitPool: CurriculumNode[] = [
+      {
+        id: "n1",
+        parent: null,
+        title: `Working Folder vs. Staging Area`,
+        status: "open",
+        mastery: "seen",
+        position: { x: 180, y: 0 * 175 },
+        context: {
+          goal: "Understand the difference between editing files in your folder, staging them with `git add`, and saving a snapshot with `git commit`.",
+          practice_task:
+            "Explain in plain words why `git commit` won't save a modified file unless you run `git add` first.",
+          explain_prompt:
+            "Explain why Git has a staging step before committing.",
+          verification_criteria: [
+            "Explains the Staging Area (git add) vs saving a Commit (git commit)",
+            "Gives a simple example or explanation in plain words",
+          ],
+          parent_summary: `Starting point for learning "${cleanTopic}".`,
+          known: ["Basic files and folders"],
+          misconception: null,
+          open_questions: [
+            "Why is it helpful to stage only specific files instead of every file you touched?",
+          ],
         },
-        ...CURATED_TOPICS["git-internals"].slice(1),
-      ],
-      edges: INITIAL_EDGES,
-    };
+        user_submission: { hypothesis: "", stuck_at: "", code_or_output: "" },
+        merge_note_md: `---\nid: n1\nparent: null\ntitle: "Working Folder vs. Staging Area"\nmastery: seen\n---\n# n1: Working Folder vs. Staging Area\n`,
+      },
+      ...CURATED_TOPICS["git-internals"].slice(1),
+    ];
+
+    const selectedGitNodes = gitPool
+      .slice(0, Math.min(gitPool.length, Math.max(3, desiredCount)))
+      .map((n, idx) => ({
+        ...n,
+        id: `n${idx + 1}`,
+        position: { x: 180, y: idx * 175 },
+      }));
+
+    return applyPreSurveyCalibration(
+      {
+        current_node_id: "n1",
+        failed_attempts: 0,
+        mastered_topics: [],
+        nodes: selectedGitNodes,
+        edges: buildSequentialEdges(selectedGitNodes),
+      },
+      preSurvey,
+      cleanTopic
+    );
   }
 
-  const stepTemplates = [
+  const allStepTemplates = [
     {
-      title: `Core Intuition & Mental Model: ${cleanTopic}`,
-      goal: `Build a clear, jargon-free first-principles mental model of "${cleanTopic}"—what problem it solves, why it exists, and how its core pieces fit together.`,
-      practice_task: `Write a concrete example, step-by-step walkthrough, formula, or snippet that illustrates the core concept of "${cleanTopic}" in action.`,
+      title: `The Big Picture: ${cleanTopic}`,
+      goal: `Understand what "${cleanTopic}" is in plain language, what problem it solves, and why it matters.`,
+      practice_task: `Explain the main idea of "${cleanTopic}" in 2-3 simple sentences, as if explaining it to a friend over coffee.`,
       criteria: [
-        `Explains the core intuition of ${cleanTopic} in plain, first-principles language`,
-        `Provides a concrete example, walkthrough, or snippet`,
+        `Explains what ${cleanTopic} does in everyday language`,
+        `Gives a simple real-world comparison or example`,
       ],
-      question: `If you had to explain "${cleanTopic}" to a smart 12-year-old using a real-world analogy, how would you describe it?`,
+      question: `If you had to explain "${cleanTopic}" without using technical buzzwords, how would you describe it?`,
     },
     {
-      title: `Fundamental Building Blocks & Rules`,
-      goal: `Identify the essential building blocks, inputs/outputs, or rules that govern "${cleanTopic}".`,
-      practice_task: `Break down a small, specific case of "${cleanTopic}" into its individual components or steps and trace how each part behaves.`,
+      title: `Core Building Blocks`,
+      goal: `Identify the 2 or 3 essential parts that make "${cleanTopic}" work.`,
+      practice_task: `List the key parts or inputs of "${cleanTopic}" and briefly describe what each part is responsible for.`,
       criteria: [
-        `Identifies the key components or rules of ${cleanTopic}`,
-        `Traces a concrete example step-by-step`,
+        `Names the key parts of ${cleanTopic}`,
+        `Explains how those parts connect`,
       ],
-      question: `Which single rule or building block in "${cleanTopic}" causes the entire system to fail if removed?`,
+      question: `Which part of "${cleanTopic}" is the most important, and what happens if it's missing?`,
     },
     {
-      title: `Step-by-Step Mechanism & Cause-and-Effect`,
-      goal: `Trace the exact cause-and-effect sequence of "${cleanTopic}" from start to finish without skipping intermediate steps.`,
-      practice_task: `Walk through a complete scenario or implementation of "${cleanTopic}" from initial state to final outcome, showing each transition.`,
+      title: `How It Works Step-by-Step`,
+      goal: `Walk through "${cleanTopic}" from start to finish so there's no "black box" mystery left.`,
+      practice_task: `Trace one simple example of "${cleanTopic}" from start to finish—what happens first, second, and last?`,
       criteria: [
-        `Explains the step-by-step cause-and-effect flow`,
-        `Demonstrates an end-to-end transition or worked example`,
+        `Walks through the step-by-step flow clearly`,
+        `Connects the input to the final result`,
       ],
-      question: `What is the most common misconception beginners have about what happens in the middle of "${cleanTopic}"?`,
+      question: `What is the easiest step to misunderstand when walking through "${cleanTopic}"?`,
     },
     {
-      title: `Edge Cases, Pitfalls & Failure Modes`,
-      goal: `Understand where "${cleanTopic}" breaks down, common mistakes people make, and how to handle edge cases cleanly.`,
-      practice_task: `Describe or write a tricky edge case or common pitfall in "${cleanTopic}", and show how to diagnose and fix it.`,
+      title: `Common Mistakes & Edge Cases`,
+      goal: `Spot the most common misunderstandings or tricky situations people run into with "${cleanTopic}".`,
+      practice_task: `Describe one common mistake beginners make with "${cleanTopic}" and how to avoid it.`,
       criteria: [
-        `Identifies a realistic edge case or pitfall in ${cleanTopic}`,
-        `Shows how to resolve or guard against that failure mode`,
+        `Identifies a realistic mistake or edge case in ${cleanTopic}`,
+        `Explains how to handle or prevent it`,
       ],
-      question: `What happens in "${cleanTopic}" when an input or assumption is unexpected or at its extreme limit?`,
+      question: `What happens when "${cleanTopic}" is given an unexpected input or used in the wrong situation?`,
     },
     {
-      title: `Synthesis & Real-World Mastery: ${cleanTopic}`,
-      goal: `Synthesize all pieces of "${cleanTopic}" to solve a realistic problem independently and teach it clearly.`,
-      practice_task: `Create a complete, self-contained summary example, solution, or mental checklist for applying "${cleanTopic}" in the real world.`,
+      title: `Real-World Application`,
+      goal: `See how "${cleanTopic}" is used in practice to solve real problems.`,
+      practice_task: `Describe a practical scenario where you would use "${cleanTopic}" and why it's the right tool for the job.`,
       criteria: [
-        `Synthesizes the full mental model of ${cleanTopic}`,
-        `Provides a complete worked application or synthesis example`,
+        `Connects ${cleanTopic} to a practical real-world use case`,
+        `Explains why it works well in that scenario`,
       ],
-      question: `How does "${cleanTopic}" connect to more advanced concepts or real-world applications in this field?`,
+      question: `When would you choose "${cleanTopic}" over an alternative approach?`,
+    },
+    {
+      title: `Trade-offs & Limitations`,
+      goal: `Understand the pros, cons, and trade-offs of "${cleanTopic}" so you can make smart decisions.`,
+      practice_task: `Compare the biggest strength of "${cleanTopic}" against its biggest limitation or cost.`,
+      criteria: [
+        `Identifies at least one trade-off or limitation`,
+        `Explains when that trade-off matters`,
+      ],
+      question: `What is the main trade-off you accept when using "${cleanTopic}"?`,
+    },
+    {
+      title: `Putting It All Together: ${cleanTopic}`,
+      goal: `Combine everything you've learned about "${cleanTopic}" into a clear, lasting takeaway.`,
+      practice_task: `Write a short summary checklist or key takeaway for "${cleanTopic}" that future-you can review in 30 seconds.`,
+      criteria: [
+        `Summarizes the complete mental model of ${cleanTopic}`,
+        `Shows clear, independent understanding`,
+      ],
+      question: `How does "${cleanTopic}" connect to what you want to learn next?`,
     },
   ];
 
-  const nodes: CurriculumNode[] = stepTemplates.map((tpl, idx) => {
+  // Dynamically pick 3 to 7 templates based on desiredCount
+  const selectedTemplates =
+    desiredCount <= 3
+      ? [allStepTemplates[0], allStepTemplates[2], allStepTemplates[6]]
+      : desiredCount === 4
+      ? [
+          allStepTemplates[0],
+          allStepTemplates[1],
+          allStepTemplates[2],
+          allStepTemplates[6],
+        ]
+      : desiredCount === 5
+      ? [
+          allStepTemplates[0],
+          allStepTemplates[1],
+          allStepTemplates[2],
+          allStepTemplates[3],
+          allStepTemplates[6],
+        ]
+      : desiredCount === 6
+      ? [
+          allStepTemplates[0],
+          allStepTemplates[1],
+          allStepTemplates[2],
+          allStepTemplates[3],
+          allStepTemplates[4],
+          allStepTemplates[6],
+        ]
+      : allStepTemplates;
+
+  const nodes: CurriculumNode[] = selectedTemplates.map((tpl, idx) => {
     const id = `n${idx + 1}`;
     return {
       id,
@@ -368,13 +559,13 @@ function buildCustomTopicFallback(topic: string): AppState {
       context: {
         goal: tpl.goal,
         practice_task: tpl.practice_task,
-        explain_prompt: `Explain ${tpl.title} in your own words using the Feynman technique.`,
+        explain_prompt: `Explain ${tpl.title} in your own words.`,
         verification_criteria: tpl.criteria,
         parent_summary:
           idx === 0
-            ? `Entry point of your custom Feynman DAG curriculum for "${cleanTopic}".`
-            : `Builds upon n${idx} to deepen your mastery of "${cleanTopic}".`,
-        known: idx === 0 ? ["First-principles reasoning"] : [`Completed n${idx}`],
+            ? `Step 1 of your learning path for "${cleanTopic}".`
+            : `Builds on Step ${idx} to deepen your understanding of "${cleanTopic}".`,
+        known: idx === 0 ? ["Everyday intuition"] : [`Completed n${idx}`],
         misconception: null,
         open_questions: [tpl.question],
       },
@@ -384,24 +575,28 @@ id: ${id}
 parent: null
 title: "${tpl.title.replace(/"/g, '\\"')}"
 mastery: seen
-tags: [feynman-dag, custom-curriculum, ${id}]
+tags: [learning-notes, ${id}]
 ---
 
 # ${id}: ${tpl.title}
 
-## Core Concept (${cleanTopic})
-First-principles Feynman notes on **${tpl.title}**.
+## Key Idea (${cleanTopic})
+Notes on **${tpl.title}**.
 `,
     };
   });
 
-  return {
-    current_node_id: "n1",
-    failed_attempts: 0,
-    mastered_topics: [],
-    nodes,
-    edges: INITIAL_EDGES,
-  };
+  return applyPreSurveyCalibration(
+    {
+      current_node_id: "n1",
+      failed_attempts: 0,
+      mastered_topics: [],
+      nodes,
+      edges: buildSequentialEdges(nodes),
+    },
+    preSurvey,
+    cleanTopic
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -409,31 +604,50 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const topicRaw = typeof body.topic === "string" ? body.topic.trim() : "";
     const presetKey = typeof body.presetKey === "string" ? body.presetKey : "";
+    const preSurvey: PreSurveyData | undefined = body.preSurvey;
+    const fileContext: string =
+      typeof body.fileContext === "string" ? body.fileContext.trim() : "";
 
     if (presetKey === "posix-shell") {
+      const calibrated = applyPreSurveyCalibration(
+        INITIAL_APP_STATE,
+        preSurvey,
+        "Build a POSIX Tiny Shell in Python"
+      );
       return NextResponse.json({
-        state: INITIAL_APP_STATE,
+        state: calibrated,
         ai_meta: {
           source: "live_ai",
-          model_used: "Curated POSIX Tiny Shell DAG",
+          model_used: "Curated POSIX Tiny Shell Path",
           warning_message: null,
         },
       });
     }
 
     if (presetKey && CURATED_TOPICS[presetKey]) {
-      const state: AppState = {
-        current_node_id: "n1",
-        failed_attempts: 0,
-        mastered_topics: [],
-        nodes: CURATED_TOPICS[presetKey],
-        edges: INITIAL_EDGES,
-      };
+      const baseNodes = CURATED_TOPICS[presetKey];
+      const sizedNodes =
+        preSurvey?.preferredDepth === "short"
+          ? baseNodes.slice(0, 3)
+          : baseNodes;
+      const state = applyPreSurveyCalibration(
+        {
+          current_node_id: "n1",
+          failed_attempts: 0,
+          mastered_topics: [],
+          nodes: sizedNodes,
+          edges: buildSequentialEdges(sizedNodes),
+        },
+        preSurvey,
+        presetKey === "tcp-http"
+          ? "HTTP Server over TCP Sockets"
+          : "How Git Stores Commits & Branches"
+      );
       return NextResponse.json({
         state,
         ai_meta: {
           source: "live_ai",
-          model_used: `Curated ${presetKey} DAG`,
+          model_used: `Curated ${presetKey} Path`,
           warning_message: null,
         },
       });
@@ -448,32 +662,50 @@ export async function POST(req: NextRequest) {
 
     if (!apiKey) {
       return NextResponse.json({
-        state: buildCustomTopicFallback(topicRaw),
+        state: buildCustomTopicFallback(topicRaw, preSurvey),
         ai_meta: {
           source: "no_api_key",
-          model_used: "Deterministic Curriculum Generator",
+          model_used: "Built-In Curriculum Generator",
           warning_message:
-            "No API key configured — generated deterministic 5-node DAG curriculum.",
+            "No API key configured — generated dynamic learning path locally.",
         },
       });
     }
 
-    const systemPrompt = `You are a Universal Curriculum Architect for a Feynman-Technique Learning Platform.
-Given ANY user topic (whether it is programming, Git, math, physics, algorithms, machine learning, finance, biology, or systems engineering), generate a 5-node sequential learning curriculum (n1, n2, n3, n4, n5) in valid JSON.
-IMPORTANT: Match the domain of the user's topic! Do NOT force Python or POSIX unless the topic is actually about Python or POSIX.
+    const targetCountHint =
+      preSurvey?.preferredDepth === "short"
+        ? "3 or 4 nodes (concise, focused path)"
+        : preSurvey?.preferredDepth === "deep"
+        ? "6 or 7 nodes (comprehensive deep dive)"
+        : "between 3 and 7 nodes dynamically chosen based on how simple or complex the topic actually is (do NOT default to 5 if 3, 4, 6, or 7 fits better)";
+
+    const levelHint = preSurvey
+      ? `Learner Level: ${preSurvey.experienceLevel}. Known Prerequisites: ${
+          preSurvey.knownPrerequisites.join(", ") || "None specified"
+        }. Adjust task difficulty and explanations to match this level.`
+      : "Learner Level: approachable, clear, and jargon-free.";
+
+    const systemPrompt = `You are a Friendly, Approachable Learning Path Designer.
+Given ANY user topic (and optional study file context), generate a dynamic sequential learning path in valid JSON.
+RULES:
+1. Dynamic Node Count: Generate ${targetCountHint}. Number them sequentially "n1", "n2", ..., "nK".
+2. Approachable Tone: Use warm, clear, everyday language. Avoid dense academic jargon.
+3. Domain Adaptive: Match the subject naturally. Never force Python or POSIX unless the topic is specifically about them.
+4. ${levelHint}
+
 Each node must have:
-- id: "n1" | "n2" | "n3" | "n4" | "n5"
-- title: concise 3-6 word title tailored to the topic
-- goal: 1-2 sentence first-principles learning goal
-- practice_task: concrete hands-on exercise, worked example, command, formula, or thought experiment appropriate for the topic
-- verification_criteria: array of 2-3 short checkable criteria strings
-- open_question: 1 Socratic question
+- id: "n1", "n2", ...
+- title: clear, friendly 3-6 word title
+- goal: 1-2 sentence approachable learning goal
+- practice_task: simple, concrete prompt asking the learner to explain or give an example in their own words
+- verification_criteria: array of 2 short, plain-English criteria strings
+- open_question: 1 thought-provoking question
 
 Respond ONLY with valid JSON: { "nodes": [ { "id": "n1", "title": "...", "goal": "...", "practice_task": "...", "verification_criteria": ["..."], "open_question": "..." }, ... ] }`;
 
     let quotaExhausted = false;
     let quotaError = "";
-    let modelUsed = "gemini-3.5-flash";
+    let modelUsed = "gemini-3.5-flash-lite";
 
     const geminiModels = [
       "gemini-3.5-flash-lite",
@@ -496,7 +728,14 @@ Respond ONLY with valid JSON: { "nodes": [ { "id": "n1", "title": "...", "goal":
                   role: "user",
                   parts: [
                     {
-                      text: `Generate a 5-node Feynman DAG curriculum for learning: "${topicRaw}"`,
+                      text: `Create a dynamic learning path for: "${topicRaw}".${
+                        fileContext
+                          ? `\nContext from user's kept study file:\n${fileContext.slice(
+                              0,
+                              1500
+                            )}`
+                          : ""
+                      }`,
                     },
                   ],
                 },
@@ -518,16 +757,23 @@ Respond ONLY with valid JSON: { "nodes": [ { "id": "n1", "title": "...", "goal":
           const jsonMatch = rawText.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
-            if (Array.isArray(parsed.nodes) && parsed.nodes.length === 5) {
+            if (
+              Array.isArray(parsed.nodes) &&
+              parsed.nodes.length >= 2 &&
+              parsed.nodes.length <= 10
+            ) {
               const builtNodes: CurriculumNode[] = parsed.nodes.map(
                 (item: Record<string, unknown>, idx: number) => {
                   const id = `n${idx + 1}`;
-                  const title = String(item.title || `Stage ${idx + 1}`);
+                  const title = String(item.title || `Step ${idx + 1}`);
                   const goal = String(item.goal || "");
                   const practice_task = String(item.practice_task || "");
                   const criteria = Array.isArray(item.verification_criteria)
                     ? item.verification_criteria.map(String)
-                    : ["Explains concept clearly", "Provides working code snippet"];
+                    : [
+                        "Explains the main idea in plain words",
+                        "Gives a concrete example",
+                      ];
                   return {
                     id,
                     parent: null,
@@ -542,14 +788,14 @@ Respond ONLY with valid JSON: { "nodes": [ { "id": "n1", "title": "...", "goal":
                       verification_criteria: criteria,
                       parent_summary:
                         idx === 0
-                          ? `Entry node for ${topicRaw}`
-                          : `Follows n${idx} in ${topicRaw}`,
-                      known: idx === 0 ? ["Fundamentals"] : [`Mastered n${idx}`],
+                          ? `Starting step for ${topicRaw}`
+                          : `Builds on Step ${idx} in ${topicRaw}`,
+                      known: idx === 0 ? ["Basics"] : [`Completed n${idx}`],
                       misconception: null,
                       open_questions: [
                         String(
                           item.open_question ||
-                            `How does ${title} work under the hood?`
+                            `Why does ${title} work this way?`
                         ),
                       ],
                     },
@@ -563,15 +809,19 @@ Respond ONLY with valid JSON: { "nodes": [ { "id": "n1", "title": "...", "goal":
                 }
               );
 
-              const candidateState: AppState = {
-                current_node_id: "n1",
-                failed_attempts: 0,
-                mastered_topics: [],
-                nodes: builtNodes,
-                edges: INITIAL_EDGES,
-              };
+              const calibrated = applyPreSurveyCalibration(
+                {
+                  current_node_id: "n1",
+                  failed_attempts: 0,
+                  mastered_topics: [],
+                  nodes: builtNodes,
+                  edges: buildSequentialEdges(builtNodes),
+                },
+                preSurvey,
+                topicRaw
+              );
 
-              const validated = AppStateSchema.safeParse(candidateState);
+              const validated = AppStateSchema.safeParse(calibrated);
               if (validated.success) {
                 modelUsed = modelName;
                 return NextResponse.json({
@@ -597,13 +847,13 @@ Respond ONLY with valid JSON: { "nodes": [ { "id": "n1", "title": "...", "goal":
     }
 
     return NextResponse.json({
-      state: buildCustomTopicFallback(topicRaw),
+      state: buildCustomTopicFallback(topicRaw, preSurvey),
       ai_meta: {
         source: quotaExhausted ? "quota_exhausted" : "error_fallback",
-        model_used: "Deterministic Curriculum Generator",
+        model_used: "Built-In Curriculum Generator",
         warning_message: quotaExhausted
-          ? `⚠️ AI QUOTA / CREDITS EXHAUSTED (${quotaError}): Generated your custom 5-node DAG using the built-in Deterministic Curriculum Engine!`
-          : `⚠️ Live AI unreachable (${quotaError}): Generated your 5-node DAG using the built-in Deterministic Engine.`,
+          ? `AI quota reached (${quotaError}) — generated your custom learning path using the built-in backup generator.`
+          : `Live AI unreachable (${quotaError}) — generated your learning path using the built-in backup generator.`,
       },
     });
   } catch (err) {
