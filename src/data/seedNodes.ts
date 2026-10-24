@@ -251,12 +251,61 @@ export const INITIAL_EDGES = [
   { id: "e-n4-n5", source: "n4", target: "n5", animated: false },
 ];
 
+export const BLANK_SLATE_NODE: CurriculumNode = {
+  id: "start",
+  parent: null,
+  title: "Start Your Learning Journey",
+  status: "open",
+  mastery: "seen",
+  position: { x: 180, y: 0 },
+  context: {
+    goal: "Welcome to Peripatetic! Enter your topic in the setup wizard to generate your custom step-by-step Feynman learning map.",
+    practice_task:
+      "Click 'Topics & Memory' at any time to configure your learning path, or click 'Live Demo' for an interactive preview.",
+    explain_prompt:
+      "What topic, concept, or project would you like to master today?",
+    verification_criteria: [
+      "Select or type a topic in the setup wizard",
+      "Generate your personalized learning path",
+    ],
+    parent_summary:
+      "Welcome to Peripatetic — Learn any topic through Socratic dialogue, Feynman notes, and dynamic helper branching.",
+    known: [],
+    misconception: null,
+    open_questions: ["What topic or skill do you want to learn?"],
+  },
+  user_submission: {
+    hypothesis: "",
+    stuck_at: "",
+    code_or_output: "",
+  },
+  merge_note_md: `---
+id: start
+parent: null
+title: "Start Your Learning Journey"
+mastery: seen
+tags: [peripatetic, welcome, getting-started]
+---
+
+# Welcome to Peripatetic
+
+Peripatetic helps you master any topic from first principles through interactive Socratic questioning, dynamic helper branching, and Feynman note synthesis.
+
+## Quick Start
+1. **Connect Gemini API Key** (Step 1)
+2. **Upload Study Notes** or start from scratch (Step 2)
+3. **Choose Your Topic & Target Project** (Step 3 & 4)
+4. Or click **Live Demo** in the top bar to explore an active session!
+`,
+};
+
 export const INITIAL_APP_STATE: AppState = {
-  current_node_id: "n1",
+  current_node_id: "start",
+  topic_title: "Getting Started",
   failed_attempts: 0,
   mastered_topics: [],
-  nodes: SEED_NODES,
-  edges: INITIAL_EDGES,
+  nodes: [BLANK_SLATE_NODE],
+  edges: [],
 };
 
 export function createLiveDemoSeedState(): AppState {

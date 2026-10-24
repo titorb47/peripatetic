@@ -143,6 +143,34 @@ export default function FeynmanDagPlatform() {
     }
   }, [appState, hydrated]);
 
+  // Automatically trigger the Final Learning Check as soon as all steps in the learning path are complete
+  useEffect(() => {
+    if (!hydrated) return;
+    if (appState.nodes.length <= 1 && appState.nodes[0]?.id === "start") return;
+
+    const rootNodes = appState.nodes.filter((n) => n.parent === null);
+    if (rootNodes.length === 0) return;
+
+    const allRootNodesMerged = rootNodes.every((n) => n.status === "merged");
+    if (
+      allRootNodesMerged &&
+      !isPostSurveyOpen &&
+      !appState.post_survey &&
+      !isOnboardingOpen
+    ) {
+      const timer = setTimeout(() => {
+        setIsPostSurveyOpen(true);
+      }, 700);
+      return () => clearTimeout(timer);
+    }
+  }, [
+    appState.nodes,
+    isPostSurveyOpen,
+    appState.post_survey,
+    isOnboardingOpen,
+    hydrated,
+  ]);
+
   // Active Curriculum Node
   const activeNode: CurriculumNode = useMemo(() => {
     return (
@@ -354,11 +382,11 @@ export default function FeynmanDagPlatform() {
     setKeptFiles([]);
     setIsBlankSlateVerified(true);
     setAppState(INITIAL_APP_STATE);
-    const n1 = INITIAL_APP_STATE.nodes[0];
+    const startNode = INITIAL_APP_STATE.nodes[0];
     setHypothesis("");
     setStuckAt("");
     setCodeOrOutput("");
-    setMergeNoteDraft(n1.merge_note_md);
+    setMergeNoteDraft(startNode?.merge_note_md ?? "");
     setImportedNotesContext("");
     setImportedFileName(null);
     setTutorResponse(null);
@@ -572,6 +600,25 @@ ${branchSpec.misconception_identified}
             : n
         ),
       }));
+
+      // Automatically trigger the Final Learning Check if this passed step completes the learning path
+      if (data.passed_verification && !activeNode.parent) {
+        const rootOrder = appState.nodes
+          .filter((n) => n.parent === null)
+          .map((n) => n.id);
+        const currentRootIdx = rootOrder.indexOf(activeNode.id);
+        const isLastRoot =
+          currentRootIdx >= 0 && currentRootIdx === rootOrder.length - 1;
+        const otherRootsMerged = appState.nodes
+          .filter((n) => n.parent === null && n.id !== activeNode.id)
+          .every((n) => n.status === "merged");
+
+        if (isLastRoot || otherRootsMerged) {
+          setTimeout(() => {
+            setIsPostSurveyOpen(true);
+          }, 900);
+        }
+      }
 
       // Automatically spawn the helper branch node onto the graph when needed (supports branching off both root nodes AND existing branches!)
       if (data.spawn_branch?.should_spawn) {
