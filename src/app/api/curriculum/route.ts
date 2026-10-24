@@ -10,11 +10,12 @@ import {
 } from "@/types/schema";
 
 const VERIFIED_GEMINI_MODELS = [
+  "gemini-3.8-flash",
   "gemini-3.5-flash",
   "gemini-3.6-flash",
-  "gemini-2.5-flash",
   "gemini-3.5-flash-lite",
   "gemini-flash-lite-latest",
+  "gemini-2.5-flash",
 ];
 
 function getApiKey(customKey?: string): string {
@@ -330,26 +331,46 @@ export async function POST(req: NextRequest) {
         });
       }
       try {
-        const testRes = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${keyToTest}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ role: "user", parts: [{ text: "Respond with OK." }] }],
-              generationConfig: { maxOutputTokens: 5 },
-            }),
+        let verifiedOk = false;
+        let lastError = "";
+        let usedModel = "gemini-3.8-flash";
+
+        for (const testModel of VERIFIED_GEMINI_MODELS) {
+          try {
+            const testRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${testModel}:generateContent?key=${keyToTest}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents: [{ role: "user", parts: [{ text: "Respond with OK." }] }],
+                  generationConfig: { maxOutputTokens: 5 },
+                }),
+              }
+            );
+            if (testRes.ok) {
+              verifiedOk = true;
+              usedModel = testModel;
+              break;
+            }
+            const errJson = await testRes.json().catch(() => ({}));
+            lastError =
+              errJson?.error?.message ||
+              `HTTP ${testRes.status} from ${testModel}`;
+          } catch (e) {
+            lastError = e instanceof Error ? e.message : "Network error";
           }
-        );
-        if (testRes.ok) {
-          return NextResponse.json({ valid: true, model: "gemini-2.5-flash" });
         }
-        const errJson = await testRes.json().catch(() => ({}));
+
+        if (verifiedOk) {
+          return NextResponse.json({ valid: true, model: usedModel });
+        }
+
         return NextResponse.json({
           valid: false,
           error:
-            errJson?.error?.message ||
-            `HTTP ${testRes.status}: Unable to authenticate key with Gemini.`,
+            lastError ||
+            "Unable to authenticate key with Gemini. Please verify your API key in Google AI Studio.",
         });
       } catch (e) {
         return NextResponse.json({
