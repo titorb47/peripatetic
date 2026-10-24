@@ -4,7 +4,7 @@ This repository is your team's project record for the hackathon. **Commit and pu
 
 ## Fill in your project details
 
-- **Team name: Less than 5 **
+- **Team name: Less than 5**
 - **Team members: Sergio, Samuel, Andres, Tito**
 
 ## Protect secrets and user data
