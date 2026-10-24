@@ -39,6 +39,7 @@ import {
   Zap,
   BatteryWarning,
   Award,
+  KeyRound,
 } from "lucide-react";
 
 import {
@@ -58,9 +59,11 @@ import {
 import { CurriculumNodeCard } from "@/components/CurriculumNodeCard";
 import { SecurityModal } from "@/components/SecurityModal";
 import { OnboardingModal } from "@/components/OnboardingModal";
+import { SessionOnboardingModal } from "@/components/SessionOnboardingModal";
 import { PostSurveyModal } from "@/components/PostSurveyModal";
 
 const STORAGE_KEY = "shell_from_scratch_feynman_dag_v2";
+const GEMINI_KEY_STORAGE_KEY = "gemini_api_key_v1";
 
 type WorkspaceTab = "briefing" | "workspace" | "tutor";
 
@@ -91,6 +94,7 @@ export default function FeynmanDagPlatform() {
 
   // UI Toggles
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(true);
+  const [userApiKey, setUserApiKey] = useState<string>("");
   const [isGeneratingCurriculum, setIsGeneratingCurriculum] = useState(false);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
   const [isPostSurveyOpen, setIsPostSurveyOpen] = useState(false);
@@ -113,6 +117,10 @@ export default function FeynmanDagPlatform() {
   // Hydrate state from localStorage and load real files from kept-notes/ directory on mount
   useEffect(() => {
     try {
+      const savedKey = localStorage.getItem(GEMINI_KEY_STORAGE_KEY);
+      if (savedKey) {
+        setUserApiKey(savedKey);
+      }
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsedJson = JSON.parse(saved);
@@ -537,6 +545,7 @@ ${branchSpec.misconception_identified}
           imported_notes_context: contextToUse,
           current_branch_depth: currentBranchDepth,
           action,
+          userApiKey: userApiKey.trim() || undefined,
         }),
       });
 
@@ -709,6 +718,50 @@ ${branchSpec.misconception_identified}
       });
       setIsPostSurveyOpen(true);
     }
+  };
+
+  // Direct note file upload handler for SessionOnboardingModal
+  const handleUploadNoteFileDirectly = async (file: File) => {
+    const rawText = await file.text();
+    const validatedMd = ImportedMarkdownSchema.safeParse({
+      filename: file.name,
+      rawContent: rawText,
+    });
+    if (!validatedMd.success) {
+      throw new Error(`Invalid markdown note (${file.name}): Failed schema check.`);
+    }
+
+    setImportedFileName(validatedMd.data.filename);
+    setImportedNotesContext(validatedMd.data.rawContent);
+
+    // Call API to analyze the note and generate prompts
+    const res = await fetch("/api/curriculum", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "analyze_file",
+        filename: validatedMd.data.filename,
+        content: validatedMd.data.rawContent,
+        userApiKey: userApiKey.trim() || undefined,
+      }),
+    });
+    const aiFile = await res.json().catch(() => ({}));
+    const newKeptItem: KeptFileItem = {
+      id: `kept-${Date.now()}`,
+      filename: validatedMd.data.filename,
+      snippet:
+        typeof aiFile?.snippet === "string"
+          ? aiFile.snippet
+          : validatedMd.data.rawContent.slice(0, 140),
+      suggestedPrompts:
+        Array.isArray(aiFile?.suggestedPrompts) && aiFile.suggestedPrompts.length > 0
+          ? aiFile.suggestedPrompts
+          : [`Learn ${validatedMd.data.filename}`],
+    };
+    setKeptFiles((prev) => [
+      newKeptItem,
+      ...prev.filter((f) => f.filename !== newKeptItem.filename),
+    ]);
   };
 
   // Import .json State File or .md Obsidian Note (with Zod validation + XML delimiter wrapping)
@@ -920,9 +973,11 @@ topic: "${appState.topic_title || "Learning Path"}"
     presetKey: string,
     customTopic?: string,
     preSurvey?: PreSurveyData,
-    fileContext?: string
+    fileContext?: string,
+    apiKeyOverride?: string
   ) => {
     setIsGeneratingCurriculum(true);
+    const keyToUse = apiKeyOverride || userApiKey;
     try {
       const res = await fetch("/api/curriculum", {
         method: "POST",
@@ -932,6 +987,7 @@ topic: "${appState.topic_title || "Learning Path"}"
           topic: customTopic ?? "",
           preSurvey,
           fileContext,
+          userApiKey: keyToUse.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -1082,10 +1138,21 @@ topic: "${appState.topic_title || "Learning Path"}"
           <button
             onClick={() => setIsOnboardingOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-cyan-500/15 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/25 transition-colors shadow-sm"
-            title="Pick what to learn, view prompts from your kept files, or adjust your starting level"
+            title="Configure Gemini API key, upload notes, or select a new topic"
           >
             <Compass className="h-3.5 w-3.5 text-cyan-400" />
-            Topics &amp; Kept Files
+            <span>Topics &amp; Memory</span>
+          </button>
+
+          <button
+            onClick={() => setIsOnboardingOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors"
+            title="View or update your Gemini API key"
+          >
+            <KeyRound className="h-3.5 w-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">
+              {userApiKey ? "API Key Connected" : "Connect API Key"}
+            </span>
           </button>
 
           <button
@@ -1797,20 +1864,26 @@ topic: "${appState.topic_title || "Learning Path"}"
         </div>
       </div>
 
-      {/* Start Screen: 2-Step Topic Picker + Dynamic Pre-Check Survey */}
-      <OnboardingModal
+      {/* Start Screen: 3-Step Wizard: 1. API Key -> 2. Memory File / Scratch -> 3. Topic Prompt */}
+      <SessionOnboardingModal
         isOpen={isOnboardingOpen}
         onClose={() => setIsOnboardingOpen(false)}
         onSelectCurriculum={handleSelectCurriculum}
-        onRunDemoSeed={handleLoadLiveDemoSeed}
-        onTriggerFileUpload={() => fileInputRef.current?.click()}
-        onTestMaliciousInjection={handleSimulateMaliciousMdImport}
-        onOpenSecurityModal={() => setIsSecurityModalOpen(true)}
-        isGeneratingCurriculum={isGeneratingCurriculum}
         keptFiles={keptFiles}
+        onUploadNoteFile={handleUploadNoteFileDirectly}
         masteredNodeTitles={appState.nodes
           .filter((n) => n.status === "merged")
           .map((n) => n.title)}
+        isGeneratingCurriculum={isGeneratingCurriculum}
+        activeApiKey={userApiKey}
+        onSaveApiKey={(key: string) => {
+          setUserApiKey(key);
+          try {
+            localStorage.setItem(GEMINI_KEY_STORAGE_KEY, key);
+          } catch {
+            // Ignore quota
+          }
+        }}
       />
 
       {/* End-of-Path Learning Check & Reflection Survey */}

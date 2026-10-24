@@ -265,6 +265,7 @@ export async function POST(req: NextRequest) {
       imported_notes_context,
       current_branch_depth,
       action,
+      userApiKey,
     } = parsed.data;
 
     const combinedUntrusted = `${user_submission.hypothesis}\n${user_submission.stuck_at}\n${user_submission.code_or_output}\n${imported_notes_context}`;
@@ -282,6 +283,7 @@ export async function POST(req: NextRequest) {
     }
 
     const apiKey = (
+      userApiKey ||
       process.env.AI_API_KEY ||
       process.env.ANTHROPIC_API_KEY ||
       process.env.GEMINI_API_KEY ||

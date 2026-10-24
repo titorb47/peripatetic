@@ -212,6 +212,7 @@ export const TutorRequestSchema = z.object({
   imported_notes_context: z.string().optional().default(""),
   current_branch_depth: z.number().int().min(0).max(20),
   action: z.enum(["diagnose", "verify"]).optional().default("diagnose"),
+  userApiKey: z.string().optional(),
 });
 
 export const ImportedMarkdownSchema = z.object({

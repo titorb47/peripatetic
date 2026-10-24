@@ -17,7 +17,10 @@ const VERIFIED_GEMINI_MODELS = [
   "gemini-flash-lite-latest",
 ];
 
-function getApiKey(): string {
+function getApiKey(customKey?: string): string {
+  if (customKey && customKey.trim()) {
+    return customKey.trim();
+  }
   return (
     process.env.AI_API_KEY ||
     process.env.GEMINI_API_KEY ||
@@ -29,14 +32,15 @@ function getApiKey(): string {
 async function callGeminiJson(
   systemPrompt: string,
   userPrompt: string,
-  temperature = 0.3
+  temperature = 0.3,
+  customApiKey?: string
 ): Promise<{
   parsed: Record<string, unknown> | null;
   modelUsed: string;
   quotaExhausted: boolean;
   errorMessage: string;
 }> {
-  const apiKey = getApiKey();
+  const apiKey = getApiKey(customApiKey);
   if (!apiKey) {
     return {
       parsed: null,
@@ -313,6 +317,47 @@ export async function POST(req: NextRequest) {
     const preSurvey: PreSurveyData | undefined = body.preSurvey;
     const fileContext: string =
       typeof body.fileContext === "string" ? body.fileContext.trim() : "";
+    const userApiKey: string =
+      typeof body.userApiKey === "string" ? body.userApiKey.trim() : "";
+
+    // 0. Test / Validate API Key action
+    if (action === "verify_api_key") {
+      const keyToTest = getApiKey(userApiKey);
+      if (!keyToTest) {
+        return NextResponse.json({
+          valid: false,
+          error: "No API key provided. Please enter your Gemini API key.",
+        });
+      }
+      try {
+        const testRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${keyToTest}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: "Respond with OK." }] }],
+              generationConfig: { maxOutputTokens: 5 },
+            }),
+          }
+        );
+        if (testRes.ok) {
+          return NextResponse.json({ valid: true, model: "gemini-2.5-flash" });
+        }
+        const errJson = await testRes.json().catch(() => ({}));
+        return NextResponse.json({
+          valid: false,
+          error:
+            errJson?.error?.message ||
+            `HTTP ${testRes.status}: Unable to authenticate key with Gemini.`,
+        });
+      } catch (e) {
+        return NextResponse.json({
+          valid: false,
+          error: e instanceof Error ? e.message : "Connection failed",
+        });
+      }
+    }
 
     // 1. AI File Analyzer: Plan learning prompts from an uploaded .md / .txt note
     if (action === "analyze_file") {
@@ -327,7 +372,8 @@ export async function POST(req: NextRequest) {
 2. "suggestedPrompts": 3 specific, engaging learning topics or questions (3-8 words each) drawn from the note.
 Respond ONLY with JSON: { "snippet": "...", "suggestedPrompts": ["...", "...", "..."] }`,
         `Filename: ${filename}\nContent:\n${content}`,
-        0.3
+        0.3,
+        userApiKey
       );
 
       if (aiRes.parsed) {
@@ -378,7 +424,8 @@ Respond ONLY with valid JSON:
         `Topic to learn: "${targetTopic}"${
           fileContext ? `\nContext from user's note:\n${fileContext.slice(0, 1200)}` : ""
         }`,
-        0.3
+        0.3,
+        userApiKey
       );
 
       const fallbackProjects = [
@@ -478,7 +525,8 @@ Respond ONLY with valid JSON:
   "feedbackSummary": "string"
 }`,
         `Learner's Big-Picture Synthesis Answer: "${synthesisAnswer}"\nLearner's Applied Scenario Answer: "${appliedScenarioAnswer}"`,
-        0.25
+        0.25,
+        userApiKey
       );
 
       if (aiRes.parsed && typeof aiRes.parsed.feedbackSummary === "string") {
@@ -590,7 +638,7 @@ Respond ONLY with valid JSON:
         : ""
     }`;
 
-    const aiRes = await callGeminiJson(systemPrompt, userPrompt, 0.35);
+    const aiRes = await callGeminiJson(systemPrompt, userPrompt, 0.35, userApiKey);
 
     if (
       aiRes.parsed &&
